@@ -1,7 +1,8 @@
 # Assessment 2 - Latent Variables & Neural Networks
-In this assessment, you need to answer two questions about EM, clustering, classification, nerual networks, and other concepts covered in Module 4 and 5. R studio is recommended to use to complete your assessment. All codes need comments to help markers to understand your idea. If no comment is given, you may have a 10% redundancy on your mark. Please refer to weekly activities as examples for how to write comments. After answering all the questions, please knit your R notebook file to HTML or PDF format. Submit both .rmd file and .html or .pdf file to assessment 1 dropbox via the link on the Assessment page. You can compress your files into a zip file for submission. The total mark of this assessment is 50, which worth 20% of your final result.
 
 ## Score: 17.6/20
+
+In this assessment, you need to answer two questions about EM, clustering, classification, nerual networks, and other concepts covered in Module 4 and 5. R studio is recommended to use to complete your assessment. All codes need comments to help markers to understand your idea. If no comment is given, you may have a 10% redundancy on your mark. Please refer to weekly activities as examples for how to write comments. After answering all the questions, please knit your R notebook file to HTML or PDF format. Submit both .rmd file and .html or .pdf file to assessment 1 dropbox via the link on the Assessment page. You can compress your files into a zip file for submission. The total mark of this assessment is 50, which worth 20% of your final result.
 
 ### Question 1: EM for Document Clustering [30 Marks]
 In this question, you need to develop an EM based document clustering algorithm using both soft and hard approches. Please read Activity 4.1 and 4.2 carefully before answering this question.
