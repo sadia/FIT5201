@@ -1,0 +1,1691 @@
+---
+title: "Assessment 1 - Linear Regression"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+In this assessment, you need to answer all the questions about KNN, Linear Regression, Regularization, Logistic Regression, K-fold cross-validation, and other concepts covered in Module 1-3. R studio is recommended to use to complete your assessment. All codes need comments to help markers to understand your idea. If no comment is given, you may have a 10% redundancy on your mark. Please refer to weekly activities as examples for how to write comments. After answering all the questions, please knit your R notebook file to HTML or PDF format. Submit both .rmd file and .html or .pdf file to assessment 1 dropbox via the link on the Assessment page. You can compress your files into a zip file for submission. The total mark of this assessment is 100, which worths 30% of your final result. 
+
+```{r}
+# import libraries
+library(ggplot2)
+library(reshape)
+library(dplyr)
+library(gridExtra)
+library(grid)
+library(gtable)
+library(stringr)
+library(caret)
+library(car)
+library(GGally)
+library(PerformanceAnalytics)
+library(AICcmodavg)
+library(glmnet)
+library(corrplot)
+```
+
+hint: Please review all reading materials in Module 1-3 carefully, especially the activities. 
+
+## Question 1 - KNN (20 marks)
+
+In this question, you are required to implement a KNN classifier to predict the class of cancer clumps. The breast cancer dataset is used in this question. A detailed description of this data set can be found at https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+%28Original%29. 
+
+Specifically, you need to:
+
+1. Split the data set into a training and a test set with the ratio of 7:3. (1 mark)
+2. Implement KNN classifiers with different K values (from 1 to 15). (5 marks)
+3. Investigate the impact of different K values (from 1 to 15) on the model performance (ACC) and the impacts of different distance measurements (Euclidean, Manhattan, Canberra, and Minkowski) on the model performance (ACC). Visualize and discuss your findings. (10 marks)
+4. Implement the Leave-one-out cross-validation for your KNN classifier with the best K value from the above steps. (4 marks)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# get data ready
+loc <- "http://archive.ics.uci.edu/ml/machine-learning-databases/"
+ds <- "breast-cancer-wisconsin/breast-cancer-wisconsin.data"
+url <- paste(loc,ds,sep = "")
+
+breast <- read.table(url,sep = ",",header = FALSE,na.strings = "?")
+
+names(breast) <- c("ID","clumpThickness","sizeUniformity","shapeUniformity","marginalAdhesion","singleEpithelialCellSize", "bareNuclei", "blandChromatin", "normalNucleoli", "mitosis", "class")
+
+# delete index column
+df <- breast[-1]
+
+# factorize data label
+df$class <- factor(df$class,levels = c(2,4),labels = c("benign","malignant"))
+```
+
+#### Q1.0 - Data Cleansing
+<font color='blue'> 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Part 0: Data Cleansing
+str(df)
+colSums(is.na(df))
+```
+
+We can see there are 16 null values in the bareNuclei column. 
+  I will remove the rows with null values
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+df <- na.omit(df)
+dim(df)
+```
+
+Plotting the data I will look for outliers.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+meltData <- melt(df)
+
+p <- ggplot(meltData, aes(factor(variable), value)) 
+p + geom_boxplot() + facet_wrap(~variable, scale="free")
+
+df %>% 
+  filter(class != "benign" & class != "malignant")
+```
+I can see that all of the data lies within the expected ranges (1-10) as based on the data info, so no need to remove any outliers. I can also see that the class column was also converted for all rows correctly.
+
+#### Q1.1: Split the data set into a training and a test set with the ratio of 7:3 (1 mark)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# set seed to make data reproducible
+set.seed(1234)
+
+# create  training and testing subsets:
+# set train size to 70% of data
+train_size <- floor(0.7 * nrow(df))
+
+# Randomly select 70% of data
+train.ind <- sample(seq_len(nrow(df)), size = train_size)
+
+train.data1 <- df[train.ind, -10] # exclude class column
+train.target1 <- df[train.ind, 10]
+test.data1 <- df[-train.ind, -10] # exclude class column
+test.target1 <- df[-train.ind, 10]
+
+dim(train.data1) # 478 records, 9 columns
+dim(test.data1) # 205 records, 9 columns
+```
+
+#### Q1.2: Implement KNN classifiers with different K values (from 1 to 15) (5 marks)
+
+```{r majority_vote_func, echo=FALSE, warning=FALSE, message=FALSE}
+# define an auxiliary function that calculates the majority votes (or mode!)
+majority <- function(x) {
+   uniqx <- unique(x)
+   uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+```
+
+```{r knn_func, echo=FALSE, warning=FALSE, message=FALSE}
+# KNN function (distance should be one of euclidean, maximum, manhattan, canberra, binary or minkowski)
+knn <- function(train.data1, train.target1, test.data1, K, distance, mink_p){
+    ## count number of train samples
+    train.len <- nrow(train.data1)
+    
+    ## count number of test samples
+    test.len <- nrow(test.data1)
+    
+    ## calculate distances between samples
+    dist <- as.matrix(dist(rbind(test.data1, train.data1), method= distance, p=mink_p))[1:test.len, (test.len+1):(test.len+train.len)]
+    
+    ## for each test sample...
+    for (i in 1:test.len){
+        ### ...find its K nearest neighbours from training sampels...
+        nn <- as.data.frame(sort(dist[i,], index.return = TRUE))[1:K,2]
+        
+        ###... and calculate the predicted labels according to the majority vote
+        test.target1[i]<- (majority(train.target1[nn]))
+    }
+    
+    ## return the class labels as output
+    return (test.target1)
+}
+```
+
+##### Assessing KNN Classifier
+
+```{r q1.2, echo=FALSE, warning=FALSE, message=FALSE, fig.height=8, fig.width=10}
+# function to return accuracy as a percentage. this will be applied to the confusion matrix
+acc <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+
+# create a vector to keep list of table_grobs 
+vec_euc <- vector(mode = "list", length = 15)
+
+for (i in c(1:15)) {
+  prediction <- knn(train.data1, train.target1, test.data1, K=i, distance = 'euclidean', 2)
+  tab <- round(prop.table(table(prediction, test.target1))*100, digits=4)
+  accuracy <- paste(acc(tab), "%")
+  table_grob <- tableGrob(tab)
+  
+  ## Title
+  title_grob <- textGrob(paste("K = ", i), gp = gpar(fontsize = 10))
+  # Accuracy
+  acc_grob <- textGrob(paste("Accuracy = ", accuracy), vjust=7, gp = gpar(fontsize = 10))
+  
+  ## Add title
+  table_grob <- gtable_add_rows(table_grob, heights = grobHeight(title_grob) + unit(5,'mm'), pos = 0)
+  table_grob <- gtable_add_grob(table_grob, title_grob, 1, 1, 1, ncol(table_grob), clip="off")
+  
+  ## Add accuracy
+  table_grob <- gtable_add_rows(table_grob, heights = grobHeight(acc_grob) + unit(5,'mm'), pos = -1)
+  table_grob <- gtable_add_grob(table_grob, acc_grob, t=1, l=1, b=5, ncol(table_grob), clip="off")
+
+  # add table_grob to vector list of tables for plotting
+  vec_euc[[i]] <- table_grob
+}
+
+grid.arrange(grobs=vec_euc, ncol=3)
+```
+
+
+#### Q1.3: Investigate the impact of different K values (from 1 to 15) on the model performance (ACC) and the impacts of different distance measurements (Euclidean, Manhattan, Canberra, and Minkowski) on the model performance (ACC). Visualize and discuss your findings. (10 marks)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+df_max <- setNames(data.frame(matrix(ncol = 3)), c("Distance", "K-value", "% Accuracy"))
+
+accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+
+executeKNN <- function(n, dist_metric, xnudge, ynudge, mink_p) {
+  df_data <- setNames(data.frame(matrix(ncol = 2)), c("K-value", "% Accuracy"))
+
+  for (i in c(1:n)) {
+    prediction <- knn(train.data1, train.target1, test.data1, K=i, distance = dist_metric, mink_p)
+    tab <- table(prediction, test.target1)
+    acc <- accuracy(tab)
+    row <- c(i, acc)
+    df_data <- rbind(row, df_data)
+  }
+  
+  # sort dataframe by accuracy in descending order
+  df_data <- df_data[order(-df_data$`% Accuracy`, na.last=NA),]
+  
+  kplot_title <- str_to_title(dist_metric)
+  if (dist_metric == "minkowski") {
+    kplot_title <- paste(kplot_title, ", p=", mink_p)
+  }
+
+  max_row <- list(kplot_title, df_data[1,1], df_data[1,2])
+  
+  # plot the k-values against accuracy
+  kplot <- df_data %>%
+    ggplot(aes(x=`K-value`, y=`% Accuracy`)) +
+      geom_line() +
+      geom_point(shape=21, color="black", fill="#6ab8b0", size=6) +
+      ggtitle(paste(kplot_title," | K-value vs. Accuracy")) +
+      geom_point(data = df_data[which.max(df_data$`% Accuracy`), ], color="red",
+                 size=3) +
+      geom_label(data = df_data[which.max(df_data$`% Accuracy`), ],
+                 aes(`K-value`, `% Accuracy`, label = paste(
+                   paste0("K = ", `K-value`),
+                   paste0("Acc % = ", round(`% Accuracy`, digits=4)), sep="\n")),
+                 vjust = "inward", hjust = "inward", nudge_x = xnudge, nudge_y = ynudge)
+
+  # print the accuracy table
+  acc_table <- tableGrob(df_data, rows = NULL)
+
+  lay <- rbind(c(1,1,2),
+               c(1,1,2),
+               c(1,1,2))
+
+  grid.arrange(kplot,
+             acc_table,
+             ncol = 3, nrow = 3,
+             layout_matrix = lay)
+  
+  return(max_row)
+}
+```
+
+
+```{r q1.3_Euclidean, echo=FALSE, warning=FALSE, message=FALSE}
+a <- executeKNN(15, "euclidean", 0.5, 0.1, 2)
+df_max <- rbind(df_max, a)
+```
+
+```{r q1.3_Manhattan, echo=FALSE, warning=FALSE, message=FALSE}
+b <- executeKNN(15, "manhattan", 5.2, 0, 2)
+df_max <- rbind(df_max, b)
+```
+
+```{r q1.3_Canberra, echo=FALSE, warning=FALSE, message=FALSE}
+c <- executeKNN(15, "canberra", 0.5, -0.1, 2)
+df_max <- rbind(df_max, c)
+```
+
+```{r q1.3_Minkowski, echo=FALSE, warning=FALSE, message=FALSE}
+d <- executeKNN(15, "minkowski", 0.5, 0.1, 2)
+df_max <- rbind(df_max, d)
+```
+
+##### Discussion   
+A brief explanation of each of the metrics:   
+
+* *Euclidean*: represents the shortest distance between two points   
+* *Manhattan*: the sum of absolute differences between points across all the dimensions (ie. the cityblock method)   
+* *Minkowski*: the generalized form of Euclidean and Manhattan Distance    
+* *Canberra*: a weighted version of the Manhattan distance.      
+
+```{r q1.3_max_results, echo=FALSE, fig.height=2, fig.width=4, message=FALSE, warning=FALSE}
+# display table of maximum accuracy and corresponding K-value 
+df_max <- na.omit(df_max)
+df_max <- df_max[order(-df_max$`% Accuracy`, na.last=NA),]
+tb_results <- tableGrob(df_max, rows=NULL)
+grid.arrange(tb_results)
+```
+    
+  All of the 4 metrics give very similar clustering results, with Canberra giving the highest % accuracy with K values of 8, 10, 11, 12, 13, and 14, Minkowski and Euclidean have produced identical results, and Manhattan produced the lowest accuracy.
+  
+  From my research, Minkowski is actually a generalised form of Euclidean and Manhattan it will calculate a different distance based on the 'p' value that is passed. If `p=1` is passed, it will return the Manhattan distance. If `p=2` is passed, it will return the Euclidean distance. From the documentation of the `dist()` function (https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/dist), we can see that `p=2` is actually the default value that is passed when `p` is not specified. This explains why the outputs of Minkowski and Euclidean are identical.
+  
+  I also plotted Minkowski with `p=1`, to compare the output to Manhattan.
+  
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+executeKNN(15, "minkowski", 5.2, 0, 1)
+```
+
+  As we can see, it returns the same result as the Manhattan distance when passed `p=1`    
+  It is interesting to see that all of the other distances produced the maximum accuracy value at multiple K-values, except for Euclidean and Minkowski `p=2`.
+  
+  As for the Canberra distance, it is often used for data scattered around an origin, as it is biased for measures around the origin and very sensitive for values close to zero. It is able to take into account several types of data (binary, categorical, quantitative, etc.). I would say that the Canberra distance would be quite well suited to this dataset - there are multiple variables to learn from and it is often used in to identify anomolies in datasets.
+  
+  It should also be noted that the Canberra distances produced the highest accuracy at a number of cluster values. However, I will go with the highest value as it has the lowest model complexity and less noise in the model. Therefore, I will say that the Canberra distance has produced the highest accuracy clustering model with K=14 as the ideal number of clusters.
+  
+  
+#### Q1.4: Implement the Leave-one-out cross-validation for your KNN classifier with the best K value from the above steps. (4 marks)
+
+```{r warning=FALSE, message=FALSE}
+# using caret package
+fit <- train(class~ .,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = 14),
+             trControl  =  trainControl(method  = "LOOCV"),
+             metric     = "Accuracy",
+             data       = df)
+fit
+```
+
+  The LOOCV method has produced an accuracy of $96.4869%$ when K = 14. This is lower than the accuracy determined by the Canberra distance, but is still within the ballpark, especially when taking into account the other distances are all around the same value.
+  The Kappa value (Kappa = (observed accuracy - expected accuracy)/(1 - expected accuracy)) is also impressively high indicating that this model has almost perfect agreement with the test and train data.
+  
+  
+
+
+## Question 2 - Linear Regression (35 marks)
+
+In this question, you need to implement a linear regression model to predict the residuary resistance of sailing yachts. The data set used in this question can be found in 'yacht_hydrodynamics.csv.' The data set has 7 features, which are summarized as below.
+
+Variations concern hull geometry coefficients and the Froude number:
+
+1. Longitudinal position of the center of buoyancy, adimensional.
+2. Prismatic coefficient, adimensional.
+3. Length-displacement ratio, adimensional.
+4. Beam-draught ratio, adimensional.
+5. Length-beam ratio, adimensional.
+6. Froude number, adimensional.
+
+The measured variable is the residuary resistance per unit weight of displacement:
+
+7. Residuary resistance per unit weight of displacement, adimensional.
+
+Specifically, you need to: 
+
+1. Perform data pre-processing, including removing invalid data, transforming the categorical features to numerical features or other operations if necessary. (4 marks) 
+2. Split the data set into a training set and a test set, with the ratio of 8:2. (1 mark)
+3. Implement stochastic gradient descent to train a linear regression model with your training data. Visualize the parameter updating process, test error (RMSE) in each iteration, and cost convergence process. Please be advised that built-in models in any released R package, like glm, are **NOT** allowed to use in this question. You can choose your preferred learning rate and determine the best iteration number. (8 marks)
+4. Evaluate your model by calculating the RMSE, and visualizing the residuals of test data. Please note that an explanation of your residual plot is needed. (5 marks) 
+5. Does your model overfit? Which features do you think are not significant? Please justify your answers. For example, you can analyze the significance of a feature from correlation, variance, etc. (8 marks)
+6. Use the *glmnet* library to built two linear regression models with Lasso and Ridge regularization, respectively. In comparison to your model, how well do these two models perform? Do the regularized models automatically filter out the less significant features? What are the differences between these two models? Please justify your answers. (8 marks)
+
+
+```{r}
+df2 = read.csv('yacht_hydrodynamics.csv')
+```
+
+<font color='blue'> 
+
+#### Q2.1: Perform data pre-processing, including removing invalid data, transforming the categorical features to numerical features or other operations if necessary. (4 marks)
+
+```{r}
+str(df2)
+colSums(is.na(df2))
+```
+
+There is a total of 308 rows of data in the dataset, and that 4 rows in column V5 have null values. The values have also been read in as numerical data types which I will leave as is. I will remove the rows with null values and plot the data in boxplots to determine any significant outliers.
+
+```{r}
+df2 <- na.omit(df2)
+dim(df2)
+```
+
+Plotting the data I will look for anomolies.
+
+```{r warning=FALSE, message=FALSE}
+# First check for duplicated data
+sum(duplicated(df2))
+
+
+scatterplotMatrix(df2, regLine = list(col="blue"), smooth=list(col.smooth="orange", col.spread="orange"), col='black')
+
+meltData <- melt(df2)
+p <- ggplot(meltData, aes(factor(variable), value))
+p + geom_boxplot() + facet_wrap(~variable, scale="free")
+
+summary(df2)
+```
+
+There is no duplicated data, and there does not appear to be any values that are significant outliers - only the Target column has some extreme values above 30, but there are 44 rows of data here (approx. 15%) and I think this is significant enough to keep.
+
+Next I will look at standardising the values in preparation for linear regression. This will be particularly important when we get to applying Lasso and Ridge Regularisation
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# standardise data
+df2scaled <- data.frame(apply(df2, MARGIN = 2, FUN = function(X) (X - min(X))/diff(range(X))))
+
+summary(df2scaled)
+
+ggpairs(df2scaled)
+```
+
+Further looking at the data, V7 appears to be negatively exponential in shape, and V6 is very obviously not normally distributed. Looking at this data, I don't think the relationship between the variables would be linear in nature.
+
+There are also some apparent correlations between the variables:   
+
+* V7, V6 (strong positive)
+* V5, V4 (moderately negative)
+* V5, V3 (strong positive)
+* V4, V3 (moderately positive)
+* V4, V2 (moderately positive)
+
+#### Q2.2: Split the data set into a training set and a test set, with the ratio of 8:2. (1 mark)
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# set seed to make data reproducible
+set.seed(1234)
+
+# source <- df2norm
+source <- df2scaled
+# create  training and testing subsets:
+# set train size to 80% of data
+train_len <- floor(0.8 * nrow(source))
+
+# Randomly select 80% of data
+train.ind2 <- sample(seq_len(nrow(source)), size = train_len)
+
+train.data2 <- source[train.ind2, -7] # exclude V7 from training data
+train.target2 <- source[train.ind2, 7]
+test.data2 <- source[-train.ind2, -7] # exclude V7 from testing data
+test.target2 <- source[-train.ind2, 7]
+
+dim(train.data2) # 243 records, 6 columns
+dim(test.data2) # 61 records, 6 columns
+
+```
+
+#### Q2.3: Implement stochastic gradient descent to train a linear regression model with your training data. Visualize the parameter updating process, test error (RMSE) in each iteration, and cost convergence process. Please be advised that built-in models in any released R package, like glm, are **NOT** allowed to use in this question. You can choose your preferred learning rate and determine the best iteration number. (8 marks)
+
+##### Auxilary Functions
+
+Define an auxiliary function that calculates the prediction and cost based on the projected data and estimated coefficients.
+
+```{r}
+
+# auxiliary function to calculate labels based on the estimated coefficients
+predict_func <- function(Phi, w){
+  # y(x,w) = Phi(x) * w
+    return(Phi%*%w)
+}
+
+# The cost function for linear regression is the sum of squared error
+error_func <- function (Phi, w, target){
+    return(0.5 * sum((predict_func(Phi, w) - target)^2))
+}
+
+# RMSE function to calculate error 
+rmse_func <- function (Phi, w, target){
+  return(sqrt(mean((predict_func(Phi, w) - target)^2)))
+}
+
+```
+
+##### SGD Function
+
+Notes:    
+
+* The loop will iterate until $\tau$ tau.max OR the actual derivative (sum of squares) is less than epsilon
+* For the first iteration tau = 1 and W[tau,] is the runif randomly assigned weights in initialization step.
+* In each iteration, we shuffle the training data and hence Phi and T.
+* Each set of values for $\pmb{w}^\tau$ is evaluated against the full set of $\pmb{\phi}$ values hence error_func(Phi, W[tau,],T)
+* For each data point $\pmb{\phi}_n$, we need to calculate $\nabla E(\pmb{w}) = -(t_n - \pmb{w}^\tau \pmb{\phi}_n)\pmb{\phi}_n$ and then update the $\pmb{w}^{\tau+1}$ by subtracting $\eta * \nabla E(\pmb{w})$ from the current value of $\pmb{w}^\tau$.
+  
+* $\pmb{w}^{\tau+1} := \pmb{w}^{\tau} - \eta  \nabla E(\pmb{w}) = \pmb{w}^{\tau+1} - -\eta(t_n - \pmb{w}^\tau \pmb{\phi}_n)\pmb{\phi}_n = \pmb{w}^{\tau+1} + \eta(t_n - \pmb{w}^\tau \pmb{\phi}_n)\pmb{\phi}_n$ can be implemented as:    
+  $W[(tau+1),j] := W[tau,j] + \eta \times (T[i]-t\_pred) \times Phi[i,j]$ where $t\_pred$ is $Phi[i,] %*% W[tau,]$
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+executeSGD <- function(tau.max, eta, epsilon) {
+  # project data using a basis function (identical here)
+  Phi <- as.matrix(cbind('X0'=1, train.data2)) # add a column of 1 as w0
+  
+  T <- train.target2 # rename for convenience
+  
+  W <- matrix(,nrow=tau.max, ncol=ncol(Phi)) # be used to store the estimated coefficients. tau.max rows for each iteration and a value for each of the coefficients Phi.
+
+  colnames(W) <- c("X0", "X1", "X2", "X3", "X4", "X5", "X6")
+  W[1,] <- runif(ncol(Phi)) # randomly select a starting point. Since values are normalised, runif can be appropriate
+  # W[1,] <- 1
+  
+  error <- data.frame('tau'=1:tau.max)  # to be used to trace the test and training errors in each iteration
+  
+  tau <- 1 # iteration counter
+  terminate <- FALSE
+    
+  while(!terminate){
+      # check termination criteria:
+      terminate <- tau >= tau.max | rmse_func(Phi, W[tau,],T)<=epsilon
+      
+      # shuffle data (sample without replacement 1:training size):
+      train.index <- sample(1:train_len, train_len, replace = FALSE)
+      
+      # update Indices after shuffling:
+      Phi <- Phi[train.index,]  # Select from the training data loaded into Phi based on the random sample
+      T   <- T[train.index]     # Grab the predicted Y values for those samples
+      
+      # for each datapoint:
+      for (i in 1:train_len){
+        
+          # check termination criteria:
+          if (tau >= tau.max | error_func(Phi, W[tau,],T)<=epsilon) {terminate<-TRUE;break}
+  
+          # Run prediction function
+          t_pred = predict_func(Phi[i,], W[tau,])
+          
+          # We need to know which way to update our weights for w values. We do this by finding the negative
+          # direction of the gradient and shifting the value of W by that amount for the next iteration.
+          # To do that we need to find that value for each X variable (i.e. partial derivative)
+          
+          # for each coefficient (X1, X2, etc.):
+          for (j in 1: ncol(W)){
+              
+              W[(tau+1),j] <- W[tau,j] + eta * (T[i]-t_pred) * Phi[i,j]  
+              
+              # Next iteration weight = Last iteration weight + change
+              # Update weights by a factor of the learning rate
+              # (T[i]-t_pred) * Phi[i,j] = (Y value - Predicted Y value) * training x-value
+            
+          }
+          
+          # Next we take our predictions for the coefficients (w) and predict the y value
+          # for every row in the training set. Repeat on the test set        
+  
+          # record the error:
+          error[tau, 'train'] <- rmse_func(as.matrix(cbind(1, train.data2)), W[tau,],train.target2)
+          error[tau, 'test'] <- rmse_func(as.matrix(cbind(1, test.data2)), W[tau,],test.target2)
+  
+          if (tau %% 1000 == 0){
+              print(paste("tau: ", tau, 'error:', error[tau, 'train']))
+          }
+          
+          # update the counter:
+          tau <- tau + 1  
+      }
+  }
+  
+  # remove NA values at the end 
+  error <- error[1:tau-1,]
+  W <- W[1:tau,]
+  f_coeffs <- W[tau,]
+  f_train_error <- tail(error$train, 1)
+  f_test_error <- tail(error$test, 1)
+  
+  result <- list("W" = W, "error" = error, "f_coeffs" = f_coeffs, "f_train_error" = f_train_error, "f_test_error" = f_test_error)
+  
+  return(result)
+  
+}
+
+tau.max <- 5000 # maximum number of iterations
+eta <- 0.01 # learning rate
+epsilon <- 0.01 * mean(T) # a threshold on the cost (to terminate the process)
+
+a <- executeSGD(tau.max, eta, epsilon)
+
+print('The final coefficents are: ')
+print(a$f_coeffs)
+
+print(paste('The final training error is:', a$f_train_error))
+print(paste('The final testing error is:', a$f_test_error))
+
+```
+
+
+```{r}
+# prepare error dataframe for visualization:
+error.m <- melt(a$error, id='tau')
+names(error.m)<-c('tau','dataset','RMSE')
+
+# plot it
+ggplot(data=error.m, aes(x=tau, y=RMSE, color=dataset)) +
+    geom_line() + 
+    ggtitle('Testing and Training RMSE Trends') +
+    theme_minimal()
+```
+
+```{r}
+# convert W matrix to a dataframe and  melt for plotting
+W.df <- as.data.frame(a$W); names(W.df) <- c('w0','w1','w2','w3','w4', 'w5', 'w6')
+W.df$tau <- 1:nrow(W.df)
+
+W.m <-melt(W.df, id='tau'); 
+names(W.m) <- c('tau', 'coefficients', 'values')
+
+ggplot(data=W.m, aes(x=tau, y=values, color=coefficients)) + geom_line() + ggtitle('Estimated Coefficients') + theme_minimal()
+```
+
+##### DISCUSSION
+
+I have played around with a number of variations on the eta, tau.max, and the initial values of W. From what I have seen, the lowest RMSE values are produced when  $\eta = 0.01$. I have played around with running the model for more iterations, but both coefficients and error tend to get quite flat after the 3000 mark. I extended to 5000 to confirm the convergence of the cost.
+
+Looking at the training vs. testing error graph, it is clear that the model performs quite similarly on both sets. In fact looking at the final error values for both it is clear that they are incredibly similar. It is interesting to see that there is a sharp drop around the 200th iteration where the model has started to perform better and the error begins to become quite small, however there is not that much difference from this point onwards through to the 5000th iteration - a 0.03 amount of difference in error. The test and train error rates also don't seem to diverge at these numbers, so I would believe that the chosen learning rate of  probably the best for this dataset.
+
+Looking at the coefficient estimates over time, we can see that they were originally randomly generated, but all manage to plateau around the 3000th iteration, although there are still small jumps in the estimates. This is to be expected though, due to the random nature of SGD, but overall I think the model has learned well.
+
+The initial value of W was another variable that I played around with. I tried $W=0$, $W=0.25$, $W=0.5$, $W=0.75$, $W=1$, and $W=random$. I found that there was little difference in the performance after 3000 iterations in all the models. Even though they jumped around quite a bit at the beginning, they all eventually converged around the 2000 iteration point, and flattened out further after 3000. This is probably due to the scaled and normalised nature of the data - the model doesn't have too many positions to jump around and can find the optimal values quickly.
+
+*eta = 0.01, tau.max = 5000, W = random*
+
+* "tau:  1000 error: 0.171746126754658"
+* "tau:  2000 error: 0.147349879977765"
+* "tau:  3000 error: 0.14337344532503"
+* "tau:  4000 error: 0.144140519480111"
+* "The final training error is: 0.142716459101373"
+* "The final testing error is: 0.145290951967881"
+
+*eta = 0.01, tau.max = 5000, W = 0*
+
+* "tau:  1000 error: 0.161600195341595"
+* "tau:  2000 error: 0.14875552450342"
+* "tau:  3000 error: 0.14362057404834"
+* "tau:  4000 error: 0.142626338680638"
+* "The final training error is: 0.142306810595871"
+* "The final testing error is: 0.145231072727277"
+
+*eta = 0.01, tau.max = 5000, W = 0.25*
+
+* "tau:  1000 error: 0.155304075556905"
+* "tau:  2000 error: 0.148003559594914"
+* "tau:  3000 error: 0.142617187364265"
+* "tau:  4000 error: 0.142999713900831"
+* "The final training error is: 0.142216415279971"
+* "The final testing error is: 0.144735190256315"
+
+*eta = 0.01, tau.max = 5000, W = 0.5*
+
+* "tau:  1000 error: 0.156928582247015"
+* "tau:  2000 error: 0.14567736804452"
+* "tau:  3000 error: 0.142524500728116"
+* "tau:  4000 error: 0.144648457907774"
+* "The final training error is: 0.142604752076509"
+* "The final testing error is: 0.145306700306085"
+
+
+*eta = 0.01, tau.max = 5000, W = 0.75*
+
+* "tau:  1000 error: 0.157478793743476"
+* "tau:  2000 error: 0.144311470323226"
+* "tau:  3000 error: 0.144696557749742"
+* "tau:  4000 error: 0.142365307325417"
+* "The final training error is: 0.143984204016896"
+* "The final testing error is: 0.146255628108942"
+
+
+*eta = 0.01, tau.max = 5000, W = 1*
+
+* "tau:  1000 error: 0.163028465837712"
+* "tau:  2000 error: 0.148500835407268"
+* "tau:  3000 error: 0.143592957468202"
+* "tau:  4000 error: 0.144977071912628"
+* "The final training error is: 0.143166006987638"
+* "The final testing error is: 0.146781135499774"
+
+Also the final test RMSE is $\approx 0.14510$. I consider this to be a fairly low value considering the data is scaled from 0 to 1, so it appears the model is quite decent at predicting the values.
+
+
+
+#### Q2.4: Evaluate your model by calculating the RMSE, and visualizing the residuals of test data. Please note that an explanation of your residual plot is needed. (5 marks)
+
+```{r}
+print(paste('The final RMSE error is:', a$f_test_error))
+
+# convert values to matrix
+coeffs <- matrix()
+
+for (i in 1:7) {
+  coeffs <- cbind(coeffs, a$f_coeffs[[i]])
+}
+
+# remove null rows
+coeffs <- coeffs[-1]
+
+coeffs
+```
+
+```{r}
+evalModel <- function(learn_data, target_data, coeffs) {
+  model_resids <- setNames(data.frame(matrix(ncol = 3)), c("Actual", "Predicted", "Residual"))
+  
+  size <- length(target_data)
+  
+  for (i in 1:size) {
+    row <- as.matrix(cbind('v0'=1, learn_data[i,]))
+    yhat <- sum(data.frame(mapply(`*`, row, coeffs)))
+    y <- target_data[i]
+    resid <- y - yhat
+    model_resids <- rbind(model_resids, c(y, yhat, resid))
+    
+  }
+  model_resids <- na.omit(model_resids)
+  return(model_resids)
+  
+}
+
+eval <- evalModel(test.data2, test.target2, matrix(coeffs))
+eval
+
+rss <- sum((eval$Predicted - eval$Actual) ^ 2)
+tss <- sum((eval$Actual - mean(eval$Actual)) ^ 2)
+rsq <- 1 - rss/tss
+rsq
+
+print(paste("The model has a", round(rsq*100, digits=2), "% accuracy on the test data"))
+```
+
+```{r warning=FALSE}
+ggplot(eval, aes(x = eval$Predicted, y = eval$Residual)) +  # Set up canvas with outcome variable on y-axis
+  geom_point() +
+  geom_line(aes(y = eval$Predicted))
+
+```
+
+There is clearly a pattern (maybe degree of 3?) in the residual data which leads me to think that this dataset is not fit for linear regression. This is further supported by the accuracy of the model on the test data ($\approx 67\%$) which indicates that the model isn't a very good fit for the data. This is not too surprising since I could already see at the beginning when exploring the data that there were signs that this dataset was not fit for a linear model, such as:
+
+* Non-linear associations in the data
+* Data not homoscedastic
+* Data has outliers
+
+
+#### Q2.5: Does your model overfit? Which features do you think are not significant? Please justify your answers. For example, you can analyze the significance of a feature from correlation, variance, etc. (8 marks)
+
+```{r}
+print(paste('The final training RMSE is:', round(a$f_train_error, digits=4)))
+print(paste('The final testing RMSE is:', round(a$f_test_error, digits=4)))
+
+chart.Correlation(df2scaled, histogram=TRUE, pch=19)
+```
+
+Considering that the RMSE of both the datasets are so incredibly close, I think the model does a good job at not overfitting or underfitting overall - it appears to be just right. However, the training error is slightly less than the testing error, and this has been the case in every case I ran the data, so it suggests a very small degree of over fitting. This could be due to the small size of the dataset.
+
+Generally, 
+test RMSE > train RMSE => OVER FITTING of the data
+test RMSE < train RMSE => UNDER FITTING of the data
+
+Looking back at the correlation graph, it's very clear that only V6 has any significant correlation to the target V7, and looking at the shapes of the data in these two columns this is even more clear. From Wikipedia, it is said that "in naval architecture the Froude number is a significant figure used to determine the resistance of a partially submerged object moving through water", so it makes sense that it would be a significant input in determining the resistance, but I am surprised that none of the other variables appear to have any sort of significant influence. 
+
+The Froude number is a dimensionless quantity used to indicate the influence of gravity on fluid motion. From my research (https://www.mermaid-consultants.com/ship-resistance-calculation.html), it is said that Ship resistance is normally a combination of four resistances:
+
+* Frictional resistance, due to friction layer formation between ship hull and viscous fluid
+* Wave making resistance, Energy transfer by the ship to create waves at free surface
+* Eddy resistance, Due to non-streamline flow at stern where flow separation happens
+* Air resistance, Windage area of hull and superstructure experience load by wind
+
+Also from (https://www.sciencedirect.com/topics/engineering/residuary-resistance), it states that it is usual to group wave-making resistance, form resistance, eddy resistance and frictional resistance into one force termed => residuary resistance (ie. V7).
+
+Learning this, it actually makes sense that none of the other elements contribute significantly to the residuary resistance. They may contribute to the other resistance elements that then contribute to the residuary resistance.
+
+To see which variables will be the most significant for V7, I will do a backward selection on all the variables to find which variables produce the model with the lowest AIC.
+
+```{r}
+model <- lm(V7 ~ ., data=df2scaled)
+smodel <- step(model)
+summary(model)
+
+anova(model)
+```
+
+It appears that the model which produces the lowest AIC value of $AIC=-1179.16$ is V7 ~ V6, so the most significant variable in determining the Residuary resistance per unit weight of displacement is the Froude number - however this is only with a linear model of degree 1.
+
+It is possible that a higher order model would be a better fit for the data points
+
+```{r message=FALSE, warning=FALSE}
+fmla1<- (as.formula(paste('V7 ~',paste('poly(',colnames(df2scaled[-7]),',1,raw=TRUE)',collapse = ' + '))))
+deg1 <-lm(fmla1,data=df2scaled)
+interaction <- aov(deg1, data = df2scaled)
+
+print(paste("------------------------------DEGREE 1 SUMMARY------------------------------"))
+summary(deg1)
+print(paste("------------------------------ANOVA 1 SUMMARY------------------------------"))
+summary(interaction)
+cat("\n\n")
+
+fmla2<- (as.formula(paste('V7 ~',paste('poly(',colnames(df2scaled[-7]),',2,raw=TRUE)',collapse = ' + '))))
+deg2 <-lm(fmla2,data=df2scaled)
+interaction <- aov(deg2, data = df2scaled)
+
+print(paste("------------------------------DEGREE 2 SUMMARY------------------------------"))
+summary(deg2)
+print(paste("------------------------------ANOVA 2 SUMMARY------------------------------"))
+summary(interaction)
+cat("\n\n")
+
+fmla3 <- (as.formula(paste('V7 ~',paste('poly(',colnames(df2scaled[-7]),',3,raw=TRUE)',collapse = ' + '))))
+deg3 <-lm(fmla3,data=df2scaled)
+interaction <- aov(deg3, data = df2scaled)
+
+print(paste("------------------------------DEGREE 3 SUMMARY------------------------------"))
+summary(deg3)
+print(paste("------------------------------ANOVA 3 SUMMARY------------------------------"))
+summary(interaction)
+cat("\n\n")
+
+fmla4 <- (as.formula(paste('V7 ~',paste('poly(',colnames(df2scaled[-7]),',4,raw=TRUE)',collapse = ' + '))))
+deg4 <-lm(fmla4,data=df2scaled)
+interaction <- aov(deg4, data = df2scaled)
+
+print(paste("------------------------------DEGREE 4 SUMMARY------------------------------"))
+summary(deg4)
+print(paste("------------------------------ANOVA 4 SUMMARY------------------------------"))
+summary(interaction)
+cat("\n\n")
+
+fmla5 <- (as.formula(paste('V7 ~',paste('poly(',colnames(df2scaled[-7]),',5,raw=TRUE)',collapse = ' + '))))
+deg5 <-lm(fmla5,data=df2scaled)
+interaction <- aov(deg5, data = df2scaled)
+
+print(paste("------------------------------DEGREE 5 SUMMARY------------------------------"))
+summary(deg5)
+print(paste("------------------------------ANOVA 5 SUMMARY------------------------------"))
+summary(interaction)
+cat("\n\n")
+
+```
+
+
+From the analysis of the above models in their RMSE, R-squared, MSE, sum of squares, significance of F and t values, and F-statistic, we can see that a polynomial of degree 4 is probably best suited for our given dataset.
+
+*Degree 1*
+
+* Residual standard error (RSE): 0.1443
+* R-squared: 0.6571
+* F-statistic: 94.87
+* Sum of squares (SS): 6.181
+* MSE: 0.021
+
+  Starting from Degree 1 (linear), we can see that the only real variable that is significant to V7 is V6. 
+Although initially these error rates appear low, it is clear that this model has a poor fit to the data when looking at these values against the other degree summaries. 
+
+*Degree 2*
+
+* Residual standard error (RSE): 0.06702
+* R-squared: 0.9275
+* F-statistic: 310.2
+* Sum of squares (SS): 1.307
+* MSE: 0.004
+
+  There is a significant jump in the F-statistic (indicating that the variables are more likely to contribute to the output, and not chance), and R-squared, and RSE, SS and MSE have all decreased significantly. This indiciates that this model is a significantly better fit for our data, however V6 is still the only significant variable.
+
+*Degree 3*
+
+* Residual standard error (RSE): 0.03018
+* R-squared: 0.9856
+* F-statistic: 1084
+* Sum of squares (SS): 0.260
+* MSE: 0.001
+
+  Again, a very big jump in the F-statistic indicating that the variables are becoming more significant as the model increases in order. R-squared has also improved a fair bit and is very close to perfect. The RSE, SS and MSE have all decreased, indicating that again this model is an even better fit than the last. Although V6 is still the most significant variable, V1 is starting the show through as having significance, as is V2.
+
+
+*Degree 4*
+
+* Residual standard error (RSE): 0.02398
+* R-squared: 0.991
+* F-statistic: 1412
+* Sum of squares (SS): 0.162
+* MSE: 0.001
+
+  The R-squared and F-statistic values have increased again, and the RSE and SS have decreased as well. The MSE has not changed but this is probably because it is already so small. The R-squared value is close to perfect, however in the analysis of each of the variables, we can see that V5 does not have enough data or significance at order levels of 3 and 4 ($V5^3$ and $V5^4$ appear as NA in the table). V6 is still the most significant variable, with V2 also appearing to be more significant, and V1 rising in significance too.
+     
+
+*Degree 5*
+
+* Residual standard error (RSE): 0.02402
+* R-squared: 0.991
+* F-statistic: 1346
+* Sum of squares (SS): 0.162
+* MSE: 0.001
+
+   We can see that both RSE and F-statistic have actually started to decrease again in this model, and that there is no change in the R-squared, SS and MSE. Looking at the significance of variables, we can also see that many of the variables are no longer contributing to the model (eg. $V1^5$, $V4^5$, all of V5). It is clear that although this model appears quite accurate, it is clear that this model performs worse compared to Degree 4, since it is excluding large chunks of data in an effort to fit to the model, and is increasing in error.
+
+  We can say that for our dataset, a model of degree 4 would be a better fit, and this can be further supported by analysing the AIC values for each of the models.
+
+```{r}
+model.set <- list(deg1, deg2, deg3, deg4, deg5)
+model.names <- c("deg1", "deg2", "deg3", "deg4", "deg5")
+
+aictab(model.set, modnames = model.names)
+
+```
+
+The above table is ranked in order from best to worst. We can see that a model of degree 4 has the lowest AIC value, and a degree of 1 performing the worst. Deg4 and Deg5 both have the highest log-likelihood, but Deg4 wins out, probably due to the reasons as mentioned above.
+
+In summary, I believe my initial model underfits the data heavily due to a low R-squared value, and the fact that the data is not suitable for single degree linear regression. I also believe that in my model, the only significant variable was V6 - the Froude number, with all other variables having very little influence.
+
+I would like to also note that in my research I have found a paper recommending for the prismatic coefficient (V2) as a function of Froude number (https://www.researchgate.net/publication/262486291_A_Practical_Design_Approach_and_RANSE-based_Resistance_Prediction_for_Medium-speed_Catamarans) which is interesting because as I found in the models with higher degrees (eg. Deg4), the V2 variable was starting to appear as more significant.
+
+
+#### Q2.6: Use the *glmnet* library to built two linear regression models with Lasso and Ridge regularization, respectively. In comparison to your model, how well do these two models perform? Do the regularized models automatically filter out the less significant features? What are the differences between these two models? Please justify your answers. (8 marks)
+
+(0:Ridge and 1:LASSO)
+lambda: range for the regularization parameter
+
+##### Auxiliary functions
+```{r}
+fitAndPlot <- function(train.data, train.label, alpha, lambda){
+    
+    # fit the model
+    fit <- glmnet(x = as.matrix(train.data), y = train.label, alpha = alpha, lambda = lambda)
+
+    # aggrigate the outputs - take the beta output of fit and transpose it (t) then add df and lambda values
+    out <- as.data.frame(as.matrix(t(fit$beta)))
+    out[,c('nonzero', 'lambda')] <- c(fit$df, fit$lambda)
+
+    # reshape the outputs (for plotting)
+    out.m<-melt(out, id=c('lambda', 'nonzero'))
+    names(out.m) <- c('lambda', 'nonzero', 'feature', 'coefficient')
+
+    # plot coefficients vs lambda 
+    g <- ggplot(data = out.m, aes(x=lambda, y=coefficient, color=factor(feature))) + 
+        geom_line() +
+        ggtitle('Coefficients vs. lambda') + 
+        theme_minimal()
+    print(g)
+    
+    # plot number of nonzero coefficients (as ameasure of model complexity) vs lambda 
+    g <- ggplot(data = out.m, aes(x=lambda, y=nonzero)) + 
+        geom_line() + 
+        scale_y_continuous(breaks=seq(0,10,1)) +
+        scale_color_discrete(guide = guide_legend(title = NULL)) + 
+        ggtitle('Nonzero Coefficients vs. lambda') + 
+        theme_minimal()
+    print(g)
+    
+    # run the predictions
+    train.predict <- predict(fit, newx=as.matrix(train.data))
+    test.predict <- predict(fit, newx=as.matrix(test.data2))
+
+    # calculate the errors
+    error <- data.frame('lambda' = out$lambda, 
+                    'train' = sqrt(colSums((train.predict - train.label)^2)/nrow(train.predict)),
+                    'test' = sqrt(colSums((test.predict - test.target2)^2)/nrow(test.predict)))
+    print(tail(error, 1))
+    error.m <- melt(error, id='lambda')
+    names(error.m) <- c('lambda', 'set', 'RMSE')
+
+    # plot sum of squarred error for train and test sets vs lambda 
+    g <- ggplot(data = error.m, aes(x=lambda, y = RMSE, color = factor(set))) + 
+        geom_line() +  
+        ylim(0,6) +
+        scale_color_discrete(guide = guide_legend(title = NULL)) + 
+        ggtitle('RMSE vs. lambda') + 
+        theme_minimal()
+    print(g)
+}
+```
+
+
+##### LASSO Regularisation
+
+```{r}
+fitAndPlot (train.data2, train.target2, alpha=1, lambda = c(0:1000)/10000)
+```
+
+
+##### RIDGE Regularisation
+
+```{r}
+fitAndPlot (train.data2, train.target2, alpha=0, lambda = c(0:1000)/10000)
+```
+
+Running these two models was much much faster than running my gradient descent model, going to show the effects of having a penalty can lead to a much faster response. While initially I was a little worred about the error rate because the model learned so quickly, looking at the RMSE of both Ridge and LASSO, they are almost exactly the same as my GD model, and as each other.
+
+However here's a very clear difference in the final models between the two. LASSO has very quickly identified that most of the variables are not important to the output and by the end of the run, we have only one non-zero coefficient which is V6 (Froude number).
+
+Ridge has kept all 6 variables and has set them all at different values.
+
+I believe that Ridge ran slightly faster than LASSO. In reality on large datasets, Ridge is much faster, but keeps all variables which may not be ideal.
+
+I'd like to run these 3 variations on larger datasets to see how they perform.
+
+
+
+## Question 3 - Logistic Regression (45 marks)
+
+In this question, you are required to implement a Logistic Regression model to classify whether a person has liver disease or not. Please read the sub-questions below carefully for detailed instructions. 
+
+1. Check out the Blood Transfusion Service Center Data Set at https://archive.ics.uci.edu/ml/datasets/ILPD+%28Indian+Liver+Patient+Dataset%29
+2. Perform data preprocessing to determine and remove invalid samples. Split the data into a training set and a test set with a ratio of 7:3. (2 marks)
+3. Develop a Logistic Regression model that uses batch gradient descent for optimization. Visualize the parameter updating process, test accuracy (ACC) in each iteration, and the cost convergence process. Please note that you need to develop your model step-by-step. Built-in models in any released R package, like glm, are **NOT** allowed to use in this question. (10 marks)
+4. Investigate the influence of different learning rates on the training process and answer what happened if you apply a too small or a too large learning rate. (5 marks)
+5. Implement and compare the batch gradient descent and the stochastic gradient descent and discuss your findings (e.g., convergence speed). Visualize the comparison in terms of updating process and the cost convergence process. (6 marks)
+6. Develop a K-fold (K = 10) cross-validation to evaluate your model in step 3. Please note that you need to write R codes to explicitly show  how you perform the K-fold cross-validation. Built-in validation methods are not allowed to use. Different metrics, e.g., ACC, Recall, precision, etc. should be used to evaluate your model. (8 marks)
+7. Use different values of K (from 5 to N, where N denotes the sample number) and summarize the corresponding changes of your model performances. Visualize and explain the changes. (6 marks)
+8. How can you modify the cost function to prevent overfitting? Discuss the possibility of adding regularization term(s) and summarize the possible changes in the gradient descent process. (8 marks)
+
+<font color='blue'> 
+
+#### Q3.1: Data Exploration 
+
+```{r}
+# rm(list = ls(all.names = TRUE))
+df3 = read.csv('ILPD.csv')
+colnames(df3)
+```
+
+
+*Columns:*
+
+* Age   
+  Age of the patient
+  
+* TB => Total Bilirubin   
+  Bilirubin is an orange-yellow pigment that occurs normally when part of your red blood cells break down. A bilirubin test measures the amount of bilirubin in your blood. It’s used to help find the cause of health conditions like jaundice, anemia, and liver disease. Normal results for a total bilirubin test are 1.2 milligrams per deciliter (mg/dL) for adults
+
+* DB => Direct Bilirubin    
+  Bilirubin attached by the liver to glucuronic acid, a glucose-derived acid, is called direct, or conjugated, bilirubin. Normal results for direct bilirubin are generally 0.3 mg/dL
+
+* Alkphos => Alkaline Phosphotase   
+  Alkaline phosphatase (ALP) is an enzyme in a person's blood that helps break down proteins. Using an ALP test, it is possible to measure how much of this enzyme is circulating in a person’s blood. The normal range for serum ALP level is 20 to 140 IU/L. High levels may indicate liver damage.
+
+* Sgpt => Alamine Aminotransferase
+  Alamine aminotransferase (ALT) is an enzyme found primarily in the liver and kidney. ALT is increased with liver damage and is used to screen for and/or monitor liver disease. A normal range is considered to be between 7 to 56 units per liter of serum.
+
+* Sgot => Aspartate Aminotransferase    
+  Aspartate Aminotransferase (AST) is an enzyme that is found mostly in the liver, but also in muscles. When your liver is damaged, it releases AST into your bloodstream. An AST blood test measures the amount of AST in your blood. The test can help your health care provider diagnose liver damage or disease. A normal range is considered to be between 10 to 40 units per liter of serum.
+
+* TP => Total Proteins    
+  Albumin and globulin are two types of protein in your body. The total protein test measures the total amount albumin and globulin in your body. Normal range is between 6 and 8.3 grams per deciliter (g/dL). Low values may indicate liver disease.
+
+* ALB => Albumin    
+  Albumin is produced only in the liver, and is the major plasma protein that circulates in the bloodstream. A low serum albumin indicates poor liver function. Normal range is 3.4 to 5.4 g/dL.
+
+* A.G.Ratio => Albumin and Globulin Ratio   
+  The albumin/globulin ratio is the amount of albumin in the serum divided by the globulins. The ratio is used to try
+to identify causes of change in total serum protein. A Decrease in albumin without decrease in globulins (ie. A.G.Ratio < 1) can indicate severe liver disease. A good ratio is 1:1.
+
+* Liver.Patient   
+  Indicates whether the patient has liver disease or not. 1 indicates disease, 2 indicates healthy.
+
+
+#### Q3.2: Perform data preprocessing to determine and remove invalid samples. Split the data into a training set and a test set with a ratio of 7:3. (2 marks)
+
+```{r}
+str(df3)
+colSums(is.na(df3))
+```
+
+There is a total of 583 rows of data in the dataset, and that 4 rows in column A.G.Ratio have null values. The values have also been read in as numerical and integer data types which I will leave as is. I will remove the rows with null values and plot the data in boxplots to determine any significant outliers.
+
+```{r}
+# remove null values
+df3 <- na.omit(df3)
+# confirm 4 rows with null values have been removed
+dim(df3)
+
+M <- cor(df3)
+corrplot(M, method="number")
+# str(df3)
+
+
+# check if any errors in output column
+unique(df3[,"Liver.Patient"])
+
+# change Liver.Patient label, where 1=has disease, 2=0=no disease
+df3$Liver.Patient[df3$Liver.Patient == 2] <- 0
+
+
+summary(df3)
+```
+
+We can see correlations between TB and DB which makes sense as DB contributes to TB, Sgot and Sgpt are also strongly related, as is ALB and TP and A.G.Ratio and ALB - again this makes sense since ALB contributes to both TP and A.G.Ratio.
+
+Next split data into test and train sets
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# set seed to make data reproducible
+set.seed(99)
+
+source <- df3
+# create  training and testing subsets:
+# set train size to 70% of data
+train_len <- floor(0.7 * nrow(source))
+test_len <- nrow(source) - train_len
+
+# Randomly select 80% of data
+train.ind3 <- sample(seq_len(nrow(source)), size = train_len)
+
+train.data3 <- source[train.ind3, -10] # exclude Liver.Patient from training data
+train.target3 <- source[train.ind3, 10]
+test.data3 <- source[-train.ind3, -10] # exclude Liver.Patient from testing data
+test.target3 <- source[-train.ind3, 10]
+
+dim(train.data3) # 405 records, 9 columns
+dim(test.data3) # 174 records, 9 columns
+```
+
+
+#### Q3.3: Develop a Logistic Regression model that uses batch gradient descent for optimization. Visualize the parameter updating process, test accuracy (ACC) in each iteration, and the cost convergence process. Please note that you need to develop your model step-by-step. Built-in models in any released R package, like glm, are **NOT** allowed to use in this question. (10 marks)
+
+Taking the following steps is necessary to build a logistic regression:
+
+* Implement sigmoid function $\sigma ( w \cdot x)$ and initialize weight vector w, learning rate $\eta$ and stopping criterion $\epsilon$  
+* Repeat the followings until the improvement becomes negligible:   
+    + For each datapoint in the training data do:   
+        $w^{(\tau+1)} := w^{(\tau)} - \eta(\sigma(w \cdot x) - t_n)x_n$
+        
+##### Auxiliary Functions
+
+```{r}
+c0 <- 0
+c1 <- 1
+
+# auxiliary function that calculate a cost function
+cost <- function (w, X, T, c0){
+    sig <- sigmoid(w, X)
+    return(sum(ifelse(T==c0, 1-sig, sig)))
+}
+
+
+# auxiliary function that predicts class labels
+pred <- function(w, X, c0, c1){
+    sig <- sigmoid(w, X)
+    return(ifelse(sig>0.5, c1,c0))
+}
+
+
+# Sigmoid function (=p(C1|X))
+sigmoid <- function(w, x){
+    return(1.0/(1.0+exp(-w%*%t(cbind(1,x)))))    
+}
+
+
+# Accuracy function
+get_accuracy <- function(w) {
+  # predict targets with current model
+  preds <- t(as.matrix(pred(w,train.data3,c0,c1)))
+  
+  # create confusion matrix, converting targets and predictions to factors
+  tab <- table(factor(preds, levels=min(train.target3):max(train.target3)), 
+      factor(train.target3, levels=min(train.target3):max(train.target3)))
+  
+  # calculate % accuracy = (TP + TN) / (TP + TN + FP + FN)
+  acc <- sum(diag(tab)/(sum(rowSums(tab)))) * 100
+  
+  return(acc)
+}
+
+
+plot_coeffs <- function(W, model) {
+  # convert W matrix to a dataframe and  melt for plotting
+  W.df <- as.data.frame(W); names(W.df) <- c('w0','w1','w2','w3','w4', 'w5', 'w6', 'w7', 'w8', 'w9')
+  W.df$tau <- 1:nrow(W.df)
+
+  W.m <-melt(W.df, id='tau');
+  names(W.m) <- c('tau', 'coefficients', 'values')
+
+  ggplot(data=W.m, aes(x=tau, y=values, color=coefficients)) + geom_line() + 
+    labs(title='Estimated Coefficients', subtitle=model) +
+    theme_minimal()
+}
+
+
+plot_costs <- function(costs,eta) {
+  ggplot(data=costs, aes(x=tau, y=log(cost)), color=black) +
+    # geom_line() + ggtitle('Log of Cost over Time') + theme_minimal()
+    geom_line() + labs(title='Log of Cost over Time', subtitle=paste("Learning rate:", eta)) + theme_minimal()
+}
+
+
+plot_acc <- function(acc, eta) {
+  ggplot(data=acc, aes(x=tau, y=accuracy), color=black) +
+    # geom_line() + ggtitle('% Accuracy over Time') + theme_minimal()
+    geom_line() + labs(title='% Accuracy over Time', subtitle=paste("Learning rate:", eta)) + theme_minimal()
+
+}
+
+```   
+
+##### executeLogReg Function
+
+```{r}
+executeLogReg <- function(data, target, tau.max, eta, epsilon, algorithm) {
+  # Initializations
+  tau <- 1 # iteration counter
+  terminate <- FALSE
+  
+  ## Just a few name/type conversion to make the rest of the code easy to follow
+  X <- as.matrix(data) # rename just for convenience
+  T <- ifelse(target==c0,0,1) # rename just for convenience
+  
+  W <- matrix(,nrow=tau.max, ncol=(ncol(X)+1)) # to be used to store the estimated coefficients
+
+  set.seed(ncol(W))
+  W[1,] <- runif(ncol(W)) # initial weight (any better idea?)
+  # W[1,] <- 0
+  
+  # project data using the sigmoid function (just for convenient)
+  Y <- sigmoid(W[1,],X)
+  
+  costs <- data.frame('tau'=1:tau.max)  # to be used to trace the cost in each iteration
+  costs[1, 'cost'] <- cost(W[1,],X,T, c0)
+  
+  model_acc <- data.frame('tau'=1:tau.max)  # to be used to trace the accuracy in each iteration
+  model_acc[1, 'accuracy'] <- get_accuracy(W[1,])
+  
+  while(!terminate){
+    # check termination criteria:
+    terminate <- tau >= tau.max | cost(W[tau,],X,T, c0)<=epsilon
+        
+    # # check termination criteria:
+    if (tau >= tau.max | cost(W[tau,],X,T, c0) <=epsilon) {terminate<-TRUE;break}
+
+    if (algorithm == "bgd") {
+      
+      # Get gradient
+      Y <- sigmoid(W[tau,],X)
+      
+      # Update the weights
+      W[(tau+1),] <- W[tau,] - eta * 1/nrow(X) * (Y-T) %*% cbind(1, X)
+      
+      # record the cost:
+      costs[(tau+1), 'cost'] <- cost(W[tau,],X,T, c0)
+      
+      # record the accuracy
+      model_acc[(tau+1), 'accuracy'] <- get_accuracy(W[tau,])
+      
+      # update the counter:
+      tau <- tau + 1
+      
+      # decrease learning rate:
+      eta = eta * 0.999
+
+    }
+    
+    if (algorithm == "sgd") {
+
+      # shuffle data:
+      train.index <- sample(1:train_len, train_len, replace = FALSE)
+      X <- X[train.index,]
+      T <- T[train.index]
+
+      # for each datapoint:
+      for (i in 1:train_len) {
+        # check termination criteria:
+        if (tau >= tau.max | cost(W[tau,],X,T, c0) <=epsilon) {terminate<-TRUE;break}
+
+        Y <- sigmoid(W[tau,],X)
+
+        # Update the weights
+        W[(tau+1),] <- W[tau,] - eta * (Y[i]-T[i]) * cbind(1, t(X[i,]))
+
+        # record the cost:
+        costs[(tau+1), 'cost'] <- cost(W[tau,],X,T, c0)
+
+        # record the accuracy
+        model_acc[(tau+1), 'accuracy'] <- get_accuracy(W[tau,])
+
+        # update the counter:
+        tau <- tau + 1
+
+        # decrease learning rate:
+        eta = eta * 0.999
+      }
+    }
+
+  }
+  costs <- costs[1:tau, ] # remove the NaN tail of the vector (in case of early stopping)
+  model_acc <- model_acc[1:tau, ]
+  W <- W[1:tau,]
+  f_coeffs <- W[tau,]
+  f_acc <- tail(model_acc, 1)
+  
+  result <- list("costs" = costs, "acc" = model_acc,  "W" = W, "f_coeffs" = f_coeffs, "f_acc" = f_acc)
+  
+  return(result)
+}
+
+```
+
+```{r}
+bgd.1 <- executeLogReg(train.data3, train.target3, 5000, 0.1, 0.01, "bgd")
+print(paste("The final accuracy is:",round(bgd.1$f_acc[2], digits=2),"%"))
+cat("The final coefficients are:", bgd.1$f_coeffs)
+```
+
+##### Visualise cost over time
+```{r}
+plot_costs(bgd.1$costs, 0.1)
+```
+
+The cost of the model drops quite quickly at the beginning, but then smooths out around the 2000th iteration, after which there is no significant improvement in the cost. The model could probably stop after the 2500th iteration.
+
+##### Visualise Coefficients over Time
+```{r}
+plot_coeffs(bgd.1$W, "BGD, Learning rate: 0.1")
+```
+
+The model has spent a significant amount of time estimating the coefficients, and it appears that it is still modifying them after the 5000th iteration. The values jump around a fair bit at the beginning, but this is due to the initial random values that the coefficients were assigned. 
+
+Looking at the final accuracy of the data, the model appears to have learned the data fairly quickly and performs average.
+
+##### Visualise % Accuracy over Time
+```{r}
+plot_acc(bgd.1$acc, 0.1)
+```
+
+The accuracy graph is very interesting because it jumps around so much and is very consistent in behaviour with the cost graph as can be seen below:
+
+```{r}
+grid.arrange(
+  plot_acc(bgd.1$acc, 0.1),
+  plot_costs(bgd.1$costs, 0.1)
+)
+```
+
+It is interesting to see how the accuracy starts off so low most likely due to the random initialisation of W, but then continues to jump around a lot while the model tries to learn. It is also interesting to see that the lower the accuracy, the lower the cost
+
+It is interesting to note that even though the model is changing the value of the ceofficients, even at the 5000th iteration, it doesn't appear to have any cost or accuracy improvements, which is why I stopped it.
+
+##### Evaluate model on test data
+
+I will look at accuracy, sensitivity and specificity.     
+  In medical settings, sensitivity and specificity are the two most reported ratios from the confusion matrix.
+  
+*Sensitivity (AKA Recall)*: true positive rate (true positive)/(true positive+false negative). This describes what proportion of patients with liver disease are correctly identified as having liver disease. If high, we aren’t missing many people with liver disease. If low, then we are missing these people and they won’t receive the treatment they should.
+  
+*Specificity*: true negative rate (true negative)/(true negative+false positive). What proportion of healthy patients are correctly identified as healthy? If high, we are marking healthy as healthy. If low, we have false positives and people will either incorrectly receive treatment or in some other way incorrectly respond to a false positive.
+
+```{r warning=FALSE}
+
+# auxiliary function that predicts class labels
+prob <- function(sigval){
+    # sigval <- sig(x)
+    return(ifelse(sigval>0.5, 1, 0))
+}
+
+# Sigmoid function (=p(C1|X))
+sig <- function(x){
+    return(1.0/(1.0+exp(-x)))    
+}
+
+evalRegModel <- function(data, target, coeffs) {
+  model_results <- setNames(data.frame(matrix(ncol = 3)), c("actual", "score", "predicted"))
+  
+  size <- length(target)
+  
+  for (i in 1:size) {
+    row <- as.matrix(cbind('v0'=1, data[i,]))
+    score <- sig(sum(data.frame(mapply(`*`, row, coeffs))))
+    yhat <- prob(score)
+    y <- target[i]
+    model_results <- rbind(model_results, c(y, score, yhat))
+    
+  }
+  # print(model_results)
+  model_results <- na.omit(model_results)
+    # create confusion matrix, converting targets and predictions to factors
+  tab <- table(factor(model_results$predicted, levels=min(test.target3):max(test.target3)), 
+      factor(model_results$actual, levels=min(test.target3):max(test.target3)))
+  # print(tab)
+  # calculate % accuracy = (TP + TN) / (TP + TN + FP + FN)
+  acc <- sum(diag(tab)/(sum(rowSums(tab)))) * 100
+  # sensitivity AKA recall
+  sen <- round(tab[1,1]/sum(tab[1,]), digits=2)
+  spec <- round(tab[2,2]/sum(tab[2,]), digits=2)
+  prec <- round(tab[1,1]/sum(tab[,1]), digits=2)
+  fscore <- round(2*((prec * sen)/(prec + sen)), digits=2)
+  
+  result <- list("acc" = acc, "sen" = sen,  "spec" = spec, "prec" = prec, "fscore" = fscore)
+  
+  return(result)
+}
+
+test_acc <- evalRegModel(test.data3, test.target3, bgd.1$f_coeffs)
+
+print(paste("The model has a", round(test_acc$acc, digits=2), "% accuracy rate on the test data"))
+print(paste("Sensitivity:", test_acc$sen))
+print(paste("Specifity:", test_acc$spec))
+print(paste("Precision:", test_acc$prec))
+print(paste("Fscore:", test_acc$fscore))
+```
+
+Looking at the model's performance on the test data set, we can see that it has $\approx 64 \%$ accuracy in correctly    predicting whether a patient has liver disease or not, which is not that great.
+
+We have a low sensitivity of $0.34$, meaning our model is missing many patients with liver disease, so these patients would not be identified for treatment.
+
+Our specificity is a much better value at $0.80$, indicating that our model is much better at identifying patients who are healthy.
+
+In a real medical setting, it would be important to have a high sensitivity AND high specificity, so I would say this model performs quite poorly. This is probably due to the size of the dataset, and the fact that we have used all of the variables available, whereas in reality we should only use the variables which are better at predicting disease.
+
+
+
+#### Q3.4: Investigate the influence of different learning rates on the training process and answer what happened if you apply a too small or a too large learning rate. (5 marks)
+
+```{r}
+bgd10 <- executeLogReg(train.data3, train.target3, 5000, 10, 0.01, "bgd")
+bgd1.0 <- executeLogReg(train.data3, train.target3, 5000, 1.0, 0.01, "bgd")
+bgd.01 <- executeLogReg(train.data3, train.target3, 5000, 0.01, 0.01, "bgd")
+bgd.001 <- executeLogReg(train.data3, train.target3, 5000, 0.001, 0.01, "bgd")
+bgd.0001 <- executeLogReg(train.data3, train.target3, 5000, 0.0001, 0.01, "bgd")
+```
+
+```{r fig.width=5, fig.height=8}
+c1 <- plot_costs(bgd10$costs, 10)
+c2 <- plot_costs(bgd1.0$costs, 1.0)
+c3 <- plot_costs(bgd.1$costs, 0.1)
+c4 <- plot_costs(bgd.01$costs, 0.01)
+c5 <- plot_costs(bgd.001$costs, 0.001)
+c6 <- plot_costs(bgd.0001$costs, 0.0001)
+
+grid.arrange(
+  c1, c2, c3, c4, c5, c6,
+  ncol=2
+)
+
+```
+
+```{r fig.width=5, fig.height=8}
+a1 <- plot_acc(bgd10$acc, 10)
+a2 <- plot_acc(bgd1.0$acc, 1.0)
+a3 <- plot_acc(bgd.1$acc, 0.1)
+a4 <- plot_acc(bgd.01$acc, 0.01)
+a5 <- plot_acc(bgd.001$acc, 0.001)
+a6 <- plot_acc(bgd.0001$acc, 0.0001)
+
+grid.arrange(
+  a1, a2, a3, a4, a5, a6,
+  ncol=2
+)
+```
+
+By changing the learning rate, we can see that when the learning rate is high, our accuracy tends to be quite high, however the cost tends to jump around all over the place and it takes the model a longer time to plateau out. 
+
+* $\eta = 10$
+  We can see the cost starts to flatten out around the 2700th iteration, but it is still learning as we can see the line is jumping around a lot (it is still quite thick). A model with this learning rate would take many more iterations before it could confidently converge. We can also see that the accuracy of this model is still fluctuating, but it appears to be around 70%.
+  
+* $\eta = 1$
+  The model starts to flatten out around the 2500th iteration, but there is still some bouncing around in costs, until it gets to the 4000th iteration when it starts to smooth. The accuracy also starts to smooth at the 4500th iteration and is around the 70% mark.
+  
+* $\eta = 0.1$
+  This is the model that I have decided to go with in my previous answer. The cost begins to smooth much earlier than the previous rates at around the 2500th iteration and appears to be at the same sort of level of $\approx 5.65$. The accuracy smooths out at the 2800th iteration, and is around the 70% mark
+  
+* $\eta = 0.01$
+  Similar performance to 0.1, however the cost smooths out slightly later as does the accuracy, however both perform quite similarly
+
+* $\eta = 0.001$
+  We start to see improvements in the cost - the model now flattens out to a cost of $5.5$ at around the 2200th iteration, however the accuracy drops down to around 65%.
+
+* $\eta = 0.0001$
+  Cost is around the same as the previous model at $5.56$, but the graph is smooth from the beginning and plateaus out very quickly. However accuracy drops again down to 64%.
+
+
+We can see that when we change the learning rate on our model, it greatly affects the cost and accuracy and the model needs to do a lot of work before the costs start to flatten out. A large learning rate at the beginning tends to more iterations but has a fairly high accuracy. A small learning rate shows that although the cost is lower, the accuracy is less
+
+
+#### Q3.5: Implement and compare the batch gradient descent and the stochastic gradient descent and discuss your findings (e.g., convergence speed). Visualize the comparison in terms of updating process and the cost convergence process. (6 marks)
+
+
+```{r}
+sgd.1 <- executeLogReg(train.data3, train.target3, 5000, 0.1, 0.01, "sgd")
+df_compare <- setNames(data.frame(matrix(ncol = 2)), c("SGD", "BGD"))
+df_compare[1,1] <- round(sgd.1$f_acc[2], digits=2)
+df_compare[1,2] <- round(bgd.1$f_acc[2], digits=2)
+row.names(df_compare) <- "% Accuracy"
+
+print(df_compare)
+```
+
+##### Plot Coefficient Estimation
+
+```{r fig.height=4}
+csgd <- plot_coeffs(sgd.1$W, "SGD")
+cbgd <- plot_coeffs(bgd.1$W, "BGD")
+
+grid.arrange(
+  csgd, cbgd  
+)
+```
+
+##### Plot Cost over time
+
+```{r fig.height=4}
+costsgd <- plot_costs(sgd.1$costs, 0.1)
+costbgd <- plot_costs(bgd.1$costs, 0.1)
+
+grid.arrange(
+  costsgd, costbgd  
+)
+```
+
+Both the SGD and BGD methods have very similar accuracy rates, however the costs in SGD are much higher and don't appear to smooth out the way that they do in BGD. Also the coefficient estimation graph is interesting. The SGD estimates jumped around (at some point it estimated w4 to be over 100!) a lot more than BGD and took longer to converge, which may be due to the size of the dataset. SGD works much faster than BGD on very large datasets, to perhaps our dataset of 403 rows of data is not large enough to show the benefits of SGD. Also the error rate of SGD is much higher than BGD and does not smooth out the same way BGD does. This is expected due to the random nature of SGD and it appears to be getting smaller as it goes through more iterations and will probably flatten out in further iterations.
+
+
+#### Q3.6: Develop a K-fold (K = 10) cross-validation to evaluate your model in step 3. Please note that you need to write R codes to explicitly show  how you perform the K-fold cross-validation. Built-in validation methods are not allowed to use. Different metrics, e.g., ACC, Recall, precision, etc. should be used to evaluate your model. (8 marks)
+
+Please note that I have two methods of training the models in kfoldcv - using glm() and using my own batch gradient descent (BGD) algorithm as defined above. Running the BGD algorithm takes my computer up to an hour so I have done my analysis on the glm outputs instead. However I have left the code to run in on the BGD in the function. To run it on BGD, please uncomment lines 1524-1526, and comment out 1528-1552.
+
+```{r message=FALSE, warning=FALSE}
+kfoldcv <- function(k, data) {
+  # shuffle data
+  set.seed(42)
+  rows <- sample(nrow(data))
+  shuff_data <- data[rows, ]
+  
+  N <- nrow(df3)
+
+  Min_index <- 0
+  folds <- list()
+
+  # create folds
+  for(i in 1:k) {
+    
+      if(i==k) {
+          Max_index <- (floor(N/k))*i+(N%%k) # For last fold make the size as the proportion N/k plus the remainder
+      }
+      else {
+          Max_index <- (floor(N/k))*i    
+      }
+    
+      folds[i] <- list(shuff_data[(Min_index+1):Max_index,]) # Append the fold to the list
+      Min_index <- Max_index # Change the starting point for next loop
+  }
+  
+  Kresults <- setNames(data.frame(matrix(ncol = 4)), c("accuracy", "precision", "recall", "fscore")) # Store the results
+  
+  for(j in 1:k) { # For each fold
+    test <- data.frame(folds[j]) # get one test chunk
+    train <- list() 
+    for(i in 1:k) { 
+      if(i!=j) { # Avoid binding the current test fold 
+          train <- rbind(train, data.frame(folds[i])) # attach other folds to be train set           
+      }
+    }
+
+    # the below two lines can be used to run the gradient descent function defined in Q3.3
+    # fit <- executeLogReg(train[,-10], train[,10], 1000, 0.1, 0.1,"bgd")
+    # preds <- evalRegModel(test[,-10], test[,10], fit$f_coeffs)
+    # Kresults <- rbind(Kresults, c(preds$acc, preds$prec, preds$sen, preds$fscore))
+
+    #  *************************** Using glm ***************************
+    fit <- glm(Liver.Patient ~ ., data=train, family="binomial" (link='logit'))
+
+    # predict the targets
+    probs <- data.frame(predict(fit, test, type="response"))
+    preds <- ifelse(probs > 0.5,1,0)
+
+    output <- cbind(test, preds)
+
+    # create confusion matrix, converting targets and predictions to factors
+    tab <- table(factor(output[,11], levels=min(test):max(test)),
+      factor(output[,10], levels=min(test):max(test)))
+
+    # calculate % accuracy = (TP + TN) / (TP + TN + FP + FN)
+    acc <- sum(diag(tab)/(sum(rowSums(tab)))) * 100
+    # sensitivity AKA recall
+    sen <- round(tab[1,1]/sum(tab[1,]), digits=2)
+    # precision
+    prec <- round(tab[1,1]/sum(tab[,1]), digits=2)
+    # f-score
+    fscore <- round(2*((prec * sen)/(prec + sen)), digits=2)
+
+    Kresults <- rbind(Kresults, c(acc, prec, sen, fscore))
+    #  *************************** to here  ***************************
+  }
+  Kresults <- na.omit(Kresults)
+  Kresults <- rbind(Kresults, c(mean(Kresults$accuracy),
+                                mean(Kresults$precision),
+                                mean(Kresults$recall),
+                                mean(Kresults$fscore)))
+  Kresults <- na.omit(Kresults)
+  final <- tail(Kresults,n=1)
+
+  res <- list("Kresults" = Kresults, "final" = final)
+  
+  return(res)
+}
+```
+
+
+```{r warning=FALSE, message=FALSE}
+k10 <- kfoldcv(10, df3)
+print(k10$final)
+```
+
+We can see that running 10-fold cross validation shows us that the accuracy is actually slightly higher than our initial evaluation in Q3.3. However the recall and precision is much lower, and fscore shows that the model is looking quite underfitted. This is interesting because I expected the model to perform a lot better in precision and recall. 
+
+
+#### Q3.7: Use different values of K (from 5 to N, where N denotes the sample number) and summarize the corresponding changes of your model performances. Visualize and explain the changes. (6 marks)
+
+
+```{r warning=FALSE, message=FALSE}
+kAll <- setNames(data.frame(matrix(ncol = 5)), c("K-value", "accuracy", "precision", "recall", "fscore")) # Store the results
+
+k5 <- kfoldcv(5, df3)
+row <- cbind("K-value"=5, k5$final)
+kAll <- rbind(kAll, row)
+
+row <- cbind("K-value"=10, k10$final)
+kAll <- rbind(kAll, row)
+
+k25 <- kfoldcv(25, df3)
+row <- cbind("K-value"=25, k25$final)
+kAll <- rbind(kAll, row)
+
+k50 <- kfoldcv(50, df3)
+row <- cbind("K-value"=50, k50$final)
+kAll <- rbind(kAll, row)
+
+k100 <- kfoldcv(100, df3)
+row <- cbind("K-value"=100, k100$final)
+kAll <- rbind(kAll, row)
+
+k250 <- kfoldcv(250, df3)
+row <- cbind("K-value"=250, k250$final)
+kAll <- rbind(kAll, row)
+
+k450 <- kfoldcv(450, df3)
+row <- cbind("K-value"=450, k450$final)
+kAll <- rbind(kAll, row)
+
+kN <- kfoldcv(nrow(df3), df3)
+row <- cbind("K-value"=nrow(df3), kN$final)
+kAll <- rbind(kAll, row)
+
+kAll <- na.omit(kAll)
+kAll
+```
+
+
+```{r}
+ga <- ggplot(kAll,aes(x=`K-value`,y=accuracy)) + 
+        geom_line() +
+        geom_point(shape=21, color="black", fill="blue", size=3) +
+        ggtitle("K-value vs. Accuracy")
+
+gb <- ggplot(kAll,aes(x=`K-value`,y=precision)) + 
+        geom_line() +
+        geom_point(shape=21, color="black", fill="pink", size=3) +
+        ggtitle("K-value vs. Precision")
+
+gc <- ggplot(kAll,aes(x=`K-value`,y=recall)) + 
+        geom_line() +
+        geom_point(shape=21, color="black", fill="purple", size=3) +
+        ggtitle("K-value vs. Recall")
+
+gd <- ggplot(kAll,aes(x=`K-value`,y=fscore)) + 
+        geom_line() +
+        geom_point(shape=21, color="black", fill="orange", size=3) +
+        ggtitle("K-value vs. F-score")
+
+grid.arrange(ga, gb, gc, gd)
+```
+
+* Precision: measure of the correctly identified positive cases from all the predicted positive cases
+* Recall: measure of the correctly identified positive cases from all the actual positive cases
+* Accuracy: measure of all the correctly identified cases
+* F1-score: mean of Precision and Recall and gives a better measure of the incorrectly classified cases than Accuracy
+
+We can see that as the number K increases, our models performance also increases, up to the point where when K=N, we have 100% accuracy. This is of course expected since the model has more iterations of training, but I am surprised to see that there is such a difference in the F-score and the accuracy. 
+
+Accuracy can be used when the class distribution is similar while F1-score is a better metric when there are imbalanced classes. Considering there were many more positive cases in our data, than negative, it would make sense that F-score is a better indicator for model accuracy, and so it appears that our model doesn't really have a good F-score until we get to K=250 onwards. So even though accuracy appears high especially at small k-values, I don't think the model actually performs that well until it gets to K=250, when we see a big improvement in the F-score. Of course, K=450 performs even better and is practically perfect.
+
+There is also a marked improvement in the precision and recall as we go up in K. For precision, the model is quite imprecise up to K=100. This could be due to our dataset having many more positive points (1s), than negative points (0s) hence the model had more data to learn from. Precision improves drastically at K=250 - jumping from 0.58 to 0.86. 
+
+It is interesting to note how well the model's recall is at lower K values. We can see at K=100 the recall is already very high at 0.86. Again I think this is due to the fact that there are many more positive cases in the dataset than there are negative, but it shows just how much that affects the recall.
+
+
+#### Q3.8: How can you modify the cost function to prevent overfitting? Discuss the possibility of adding regularization term(s) and summarize the possible changes in the gradient descent process. (8 marks)
+
+In the gradient descent algorithms, we can we can apply regularization terms to the model's weights. This will add a cost to the loss function large weights (or parameter values). This forces a simpler model that learns only the relevant patterns in the train data.
+
+There are two types of regularisation techniques: L1 and L2.
+L1 regularization will add a cost with regards to the absolute value of the parameters, resulting in some of the weights to equal zero.
+
+L2 regularization will add a cost with regards to the squared value of the parameters, resulting in smaller weights. Larger coefficients strongly penalized because of the squaring.
+
+L2 is better suited to data that is very complex and difficult to be modelled accurately, whereas L1 is better for data that is easily modelled. L1 is also robust to outliers and  Can be used for feature selection, but is slower to converge than L2.
+
+What this would mean for our changes in the gradient descent algorithm is that there is an added parameter in our cost function when we update our weights.
+
+If we added an L2 regularisation term to our cost function, this would result in the Variance being reduced i.e. coefficients are reduced in magnitude. 
+
+If we added an L1 regularisation, it would result in reduced Variance and will also act as a feature selector. This could also result in a different number of coefficients in our calculations.
+
+Assuming our cost function is $f(x)$, then we are trying to calculate $min_x f(x)$.
+When adding regularisation, our cost function now looks like: $min_x f(x) +\lambda g(x)$ where $\lamda$ is a hyperparameter that helps control the relative importance of the regulariser function $g(x)$.
+
+An interesting point that I came across in my research shows that the optimal point may not always be at 0. When we look at our cost function, our aim is to minimise it as much as possible so it becomes close to 0. However this may not always be the case.
+
+An L2-regularised cost function is smooth, meaning the optimum value is at a stationary point (where derivative = 0). The stationary point of $f(x)$ can get very small when $\lambda$ is increased but won't equal 0.
+
+L1-regularized cost function is non-smooth, meaning it may not be differentiable at 0. Again, we assume the optimum of a function is either at a point where the derivative = 0, but in a non-smooth function (such as $y=|x|$), this would be at corner (an irregularity) so it's possible that the optimal point of $f(x)$ is 0 even if 0 isn't the stationary point of f.
+
+</font>
+
+
+
+
+
+
+
+
+
