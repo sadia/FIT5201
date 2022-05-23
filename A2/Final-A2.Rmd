@@ -1,0 +1,711 @@
+---
+title: "Assessment 2 - Latent Variables & Neural Networks"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+############################ TO DO ############################
+- Add the epsilon back in to the GMM function (if mu.old - mu.new < epsilon)
+
+
+
+
+
+# Assessment 2 - Latent Variables & Neural Networks
+
+In this assessment, you need to answer two questions about EM, clustering, classification, nerual networks, and other concepts covered in Module 4 and 5. R studio is recommended to use to complete your assessment. All codes need comments to help markers to understand your idea. If no comment is given, you may have a 10% redundancy on your mark. Please refer to weekly activities as examples for how to write comments. After answering all the questions, please knit your R notebook file to HTML or PDF format. Submit both .rmd file and .html or .pdf file to assessment 1 dropbox via the link on the Assessment page. You can compress your files into a zip file for submission. The total mark of this assessment is 50, which worth 20% of your final result.
+
+hint: Please review all reading materials in Module 4 and 5 carefully, especially the activities.
+
+# Question 1: EM for Document Clustering [30 Marks]
+
+In this question, you need to develop an EM based document clustering algorithm using both soft and hard approches. Please read Activity 4.1 and 4.2 carefully before answering this question. 
+
+1. Perform data preprocessing and feature extraction as necessary. [5 marks]
+
+2. You need to implement both soft and hard EM-trained GMMs within the given interface and use the Boolean parameter 'hardclustering' to decide which GMM is activated. The GMM function interface has been defined, in which function inputs and output are specified. Please don't rename the function or change its input or output. [10 marks]
+
+3. Implement a function that use true labels to evaluate your clustering performance. Please read below instructions for more details. [10 marks] 
+
+For example, you can view your clustering results as a series of decisions, one for each of the $N(N-1)/2$ pairs of documents in the collection, where N is the sample number. A true positive (TP) decision assigns two similar documents to the same cluster, a true negative (TN) decision assigns two dissimilar documents to different clusters. There are two types of errors we can commit. A (FP) decision assigns two dissimilar documents to the same cluster. A (FN) decision assigns two similar documents to different clusters. The Rand index (RI) measures the percentage of decisions that are correct. That is, it is simply accuracy
+$$\mathrm{RI}=\frac{\mathrm{TP}+\mathrm{TN}}{\mathrm{TP}+\mathrm{FP}+\mathrm{FN}+\mathrm{TN}}$$
+
+Compare the clustering performances of using word count and Term Frequency–Inverse Document Frequency (TFIDF) as features, and explain your results. [5 marks]
+
+
+Please provide enough comments in your submitted code.
+
+### Data
+
+We use a subset of a publicly available dataset called 20 Newsgroups originally published in http://qwone.com/~jason/20Newsgroups/. This dataset contains more than 18K documents covering 20 different topics. For the simplicity and reducing the execution and evaluation times, we only use 2000 samples randomly selected from 4 categories. The filtered data is stored in 20ng-train-all-terms.txt file.
+
+### Background of the soft-EM and hard-EM
+
+##### Soft EM  
+  **E-Step**
+  
+  For each cluster $k$, based on its current mixing component $\varphi_k^{old}$, mean $\mu_k^{old}$ and covariance matrix $\Sigma_k^{old}$, calculate the posterior probability of observation $x_n$ being in cluster $k$, denoted by $\gamma(z_{nk})$
+  
+  $\gamma(z_{nk}):= p(z_{nk} = 1 \mid \varphi_k^{old}, \mu_k^{old}, \Sigma_k^{old}) = \frac{\varphi_k^{old}\mathcal{N}(x_n|\mu_k^{old},\Sigma_k^{old})}{\sum_j\varphi_j^{old}\mathcal{N}(x_n|\mu_j^{old},\Sigma_j^{old})}$  
+  
+  **M-Step**
+ 
+  Update the parameters as the following:
+  
+  mixing components: $\varphi_k^{new} = \frac{N_k}{N}$ where  $N_k = \sum_{n=1}^N \gamma(z_{nk})$  
+  mean: $\mu_k^{new} = \frac{1}{N_k}\sum_{n=1}^N\gamma(z_{nk})x_n$  
+  covariance matrix: $\Sigma_k^{new} = \frac{1}{N_k}\sum_{n=1}^N\gamma(z_{nk})(x_n - \mu_k)(x_n - \mu_k)^T$
+  
+##### Hard EM  
+  **E-Step**
+
+  For each cluster $k$, based on its current mixing component $\varphi_k^{old}$, mean $\mu_k^{old}$ and covariance matrix $\Sigma_k^{old}$, calculate the posterior probability of observation $x_n$ being in cluster $k$, denoted by $\gamma(z_{nk})$
+  
+  $\gamma(z_{nk}):= p(z_{nk} = 1 \mid \varphi_k^{old}, \mu_k^{old}, \Sigma_k^{old}) = \frac{\varphi_k^{old}\mathcal{N}(x_n|\mu_k^{old},\Sigma_k^{old})}{\sum_j\varphi_j^{old}\mathcal{N}(x_n|\mu_j^{old},\Sigma_j^{old})}$ 
+  
+  then set $z_{nk^*}=1$ and everywhere else to 0, where $k^* \leftarrow argmax_k \gamma(z_{nk})$ 
+  
+  **M-Step**
+  
+  Update the parameters as the following:
+    
+  mixing components: $\varphi_k^{new} = \frac{N_k}{N}$ where $N_k = \sum_{n=1}^N z_{nk}$  
+  mean: $\mu_k^{new} = \frac{1}{N_k}\sum_{n=1}^Nz_{nk}x_n$  
+  covariance matrix: $\Sigma_k^{new} = \frac{1}{N_k}\sum_{n=1}^N(z_{nk})(x_n - \mu_k)(x_n - \mu_k)^T$  
+  
+  
+### Question 1 answer:
+
+For this question, I will write  seperate functions that will handle:
+
+* Parameter initialisation
+* E.step (soft and hard)
+* M.step (soft and hard)
+
+All of the above functions will be called by the c.GMM function
+
+
+**Hint: Comments and explanation for each step are required to be inserted below.**
+
+```{r}
+# load required text mining library
+rm(list=ls()) 
+library(mvtnorm) # generates multivariate Gaussian sampels and calculate the densities
+library(NLP) # natural language preprocessing
+library(tm) # text mining library
+library(SnowballC)
+library(reshape2) # for melt and cast functions
+library(ggplot2) # for plotting functions
+library(repr) # to resize the plots
+library(RColorBrewer)
+library(wordcloud)
+library(h2o)
+
+```
+
+
+```{r}
+# load the text file (each line of the text file is one document)
+# extract labels and text out
+set.seed(42)
+# Read the data
+text_df <- read.table("20ng-train-all-terms.txt", sep = "\t", colClasses = c("factor", "character"), na.strings = "null")
+
+## the terms before the first '\t' are the labels (the newsgroup names) and all the remaining text after '\t' 
+## are the actual documents
+
+# code to shuffle dataset ##########
+# rows <- sample(nrow(text_df))
+# text_df <- text_df[rows, ] # shuffle the training data
+####################################
+
+docs <- text_df
+colnames(docs) <- c("doc_id", "text")
+docs$doc_id <- rownames(docs)
+
+# store the labels for evaluation
+labels <- text_df[1]
+
+# Get the factor levels for labels for comparison (ie. convert them to 1, 2,3 4)
+labels.levels <- as.matrix(as.numeric(unlist(labels)))
+```
+
+
+### Q1.1: Pre-processing
+
+```{r}
+# 1. preprocessing
+
+# create a corpus
+docs <- DataframeSource(docs)
+corpus <- Corpus(docs)
+
+# Preprocessing:
+corpus <- tm_map(corpus, removeWords, stopwords("english")) # remove stop words 
+  #(the most common word in a language that can be find in any document)
+corpus <- tm_map(corpus, removePunctuation) # remove pnctuation
+corpus <- tm_map(corpus, stemDocument) # perform stemming (reducing inflected and derived words to their root form)
+corpus <- tm_map(corpus, removeNumbers) # remove all numbers
+corpus <- tm_map(corpus, stripWhitespace) # remove redundant spaces 
+# Create a document term matrix which its rows are the documents and colomns are the words. 
+# Each number in Document Term Matrix shows the frequency of a word (colomn header) in a particular document (row title)
+dtm <- DocumentTermMatrix(corpus)
+## reduce the sparcity of out dtm
+dtm <- removeSparseTerms(dtm, 0.9) # remove words that don't appear at least 10% of the time
+
+mdtm <- as.matrix(dtm) # convert to matrix
+
+dim(mdtm) # 2000 rows (documents); 133 columns (words)
+head(mdtm[,1:10], n = 10L)
+```
+
+
+#### Extra Functions
+
+
+##### normaliseLog( )
+
+To normalise log values and prevent underflowing/overflowing. Code inspiration from https://gregorygundersen.com/blog/2020/02/09/log-sum-exp/
+
+```{r}
+logSumExp <- function(a) {
+   max = max(a)
+   return ( max + log(sum(exp(a-max))))
+}
+```
+
+
+##### init.params( )
+
+* **Inputs:**
+  * X: dataframe of data to cluster (words x docs)
+  * K: number of clusters to form
+  
+* **Outputs:**
+
+The following initialised parameters:
+
+* Phi.hat: a single column matrix that holds the probabilities
+* Mu.hat: weighted cluster means
+* Nk.hat: effective number of points assigned to each cluster
+* Sigma.hat: identity covariance matrix
+
+```{r}
+init.params <- function(X, K) {
+  set.seed(42) # save the random seed to make the results reproducible
+  
+  N <- nrow(X)    # number of documents
+  D <- ncol(X)    # number of words
+  
+  Phi.hat <- matrix(1/K,nrow = K, ncol=1)  # the fraction of samples that are from cluster k
+  
+  Nk.hat <- matrix(N/K,nrow = K)  # initiate  the effective number of points assigned to each cluster
+
+  Mu.hat <- as.matrix(X[sample(1:N, K), ]) # initiate Mu
+  # Mu.hat <- as.matrix(X[match(c(1,2,3,4),labels.levels), ]) # initiate mu with data from each class to see difference in performance
+  # Mu.hat <- matrix(runif(K*D), nrow = K, ncol = D)
+
+  Sigma.hat <- matrix(0, nrow = K, ncol = D^2)    # initiate the covariance matrix
+  ### for each cluster k:
+  for (k in 1:K){
+      #### initiate the k covariance matrix as an identity matrix (we will update it later on)
+      Sigma.hat[k,] <- diag(D) # initialize with identity covariance matrix
+  }
+
+  return(list("Phi.hat" = Phi.hat, "Nk.hat" = Nk.hat, "Mu.hat" = Mu.hat, "Sigma.hat" = Sigma.hat))
+}
+```
+
+
+### Question 1.2: Implement GMM Function
+
+```{r}
+# 2. implement GMM function
+
+# X is dataframe of data to cluster (nrow:133 words x ncol:2000 docs), K = number of clusters to form, hardclustering(T/F) for hard(True) or soft(False) clustering
+c.GMM <- function(X, K, hardclustering){
+  
+  terminate <- FALSE
+  # Model Parameter Setting
+  eta <- 1
+  eta.max <- 10 #max number of iterations
+  eps <- 0.01     # termination threshold 
+  
+  N <- nrow(X) # number of documents
+  D <- ncol(X) # number of unique words (in all documents)
+  
+  # a matrix of very small value to avoid NaN where all elements are zeros when calculating new means
+  # from https://stackoverflow.com/a/63371717
+  epsilon <- matrix(1e-10, nrow = D, ncol = N)
+  
+  # Initialisation
+  theta <- init.params(X, K)
+  post <- matrix(0, nrow=N, ncol=K) # posterior matrix for membership (responsibility or gamma) estimates
+  Mu.hat.old <- theta$Mu.hat
+  
+  # Build the model
+  while(!terminate){
+    
+    # E step:    
+    for (n in 1:N){
+      for (k in 1:K){
+        # calculate the posterior based on the estimated mu and theta     
+        post[n,k] <- dmvnorm(X[n,], theta$Mu.hat[k,],  matrix(theta$Sigma.hat[k,], ncol=D), log=TRUE) + log(theta$Phi.hat[k])
+      }
+      # normalisation to sum to 1 in the log space
+      postLog <- logSumExp(post[n,])
+      post[n,] <- post[n,] - postLog
+    }
+    # converting from the log space to the linear space
+    post <- exp(post)
+
+    # HARD CLUSTERING 
+    # for each document, find the cluster with the highest probability and assign it with 1, and all other clusters with 0
+    # then update parameters
+    if (hardclustering == TRUE) {
+      max.prob <- post==apply(post, 1, max) # for each point find the cluster with the maximum (estimated) probability
+      post[max.prob] <- 1 # assign each point to the cluster with the highest probability
+      post[!max.prob] <- 0 # remove points from clusters with lower probabilites
+    }
+    
+    # Update parameters - SOFT CLUSTERING will come to this step directly after converting data back to the linear space
+    for (k in 1:K) {
+  
+      ## recalculate the estimations:
+      theta$Nk.hat[k] <- sum(post[,k])  # the effective number of point in cluster k
+      
+      theta$Phi.hat[k] <- (sum(post[,k])) / N     # the relative cluster size
+      
+      theta$Mu.hat[k,] <- colSums((post[,k] * X) + epsilon[,k]) / (theta$Nk.hat[k] + epsilon[k]) # new means (cluster cenroids)
+
+      theta$Sigma.hat[k,] <- (t(X-matrix(theta$Mu.hat[k,], nrow = N, ncol=D, byrow = TRUE))%*%
+                        (post[,k]*(X-matrix(theta$Mu.hat[k,], nrow = N, ncol=D, byrow = TRUE))))/(theta$Nk.hat[k] + epsilon[k]) # new covariance
+    }
+
+    # increase the epoch counter
+    eta <- eta+1
+    
+    cat(eta, sum(abs(Mu.hat.old - theta$Mu.hat)), '\n') # print eta and mu difference to observe convergence
+    # check the termination criteria
+    terminate <- eta > eta.max | sum(abs(Mu.hat.old - theta$Mu.hat)) <= eps
+    
+    # record the means (neccessary for checking the termination criteria)
+    Mu.hat.old <- theta$Mu.hat
+  }
+  return(post)
+}
+```
+
+
+#### Hard GMM EM
+```{r}
+GMM.hard <- c.GMM(mdtm, 4, hardclustering = TRUE)
+head(GMM.hard)
+```
+
+
+```{r}
+GMM.soft <- c.GMM(mdtm, 4, hardclustering = FALSE)
+head(GMM.soft)
+```
+
+
+This exercise was interesting due to the many different levers that I played with to try and get a better performance from the model (ie. faster convergence or higher accuracy). 
+
+Firstly, I tried shuffling the data set to see if it would help train the model better - currently the model sees the data for each cluster in blocks (ie. the first 500 documents are cluster 1, the next 500 are cluster 2, and so on), where it is looking for differences. So I expected that it would make errors in clustering, but this appeared to make the model accuracy worse with the given starting points. 
+
+Next started experimenting with changing the initialisation parameters for Mu.hat and this proved to have the biggest influence. EM is very sensitive to the starting points of the means. I was able to get a range of accuracies from 25% up to 70%. For some initial values, the model stopped after 3 iterations and only ended up predicting 1 class so these were obviously not good choices for initial parameters. For some starting values, the model missed predicting some clusters altogether, so again, not good starting points.
+
+I also tested by cheating a little bit and setting the starting means for each cluster with the data from a row assigned to that label. The algorithm ended up converging very quickly, but still only had about 60% accuracy with both Soft and Hard EM. This led me to think that the word sparsity could be a big factor. I explore this further later in the TF-IDF section.
+
+I have chosen to leave my answers with the output from seed(42), as even though the performance ends up being quite poor, both Hard and Soft models perform similarly.
+
+
+### Q1.3: Define evl( ) function
+
+Prepare data for RI calculation
+
+```{r}
+hard.preds <- max.col(GMM.hard, "first") # Get the actual clusters predicted hard c.GMM  (eg, 1, 2, 3, 4)
+hard.preds <- as.matrix(hard.preds) # convert to matrix
+
+soft.preds <- max.col(GMM.soft, "first") # Get the actual clusters predicted soft c.GMM 
+soft.preds <- as.matrix(soft.preds) # convert to matrix
+```
+
+
+To calculate the Rand Index, we first need to find out which documents are similar by determining which documents have the same cluster. To do this, we must iterate through every possible pair of documents
+
+```{r}
+# function to create NxN matrix that has 1 in the row,col position if the pair of docs have the same cluster, else 0
+npairs.matrix <- function(data) {
+  N <- nrow(data)
+  npairs.mat <- matrix(0, nrow = N, ncol = N) # initialise NxN matrix with 0s
+  
+  for (row in 1:N) { 
+    for (col in 1:N) {
+      # For each pair of docs, if the cluster number matches, insert a 1 in that position in the npairs.matrix, else continue
+      ifelse(data[row,] == data[col,], npairs.mat[row, col] <- 1, next) 
+    }
+  }
+  return(npairs.mat) # The returned matrix will have a 1 in the position where the doc pairs have the same cluster assigned, and 0 otherwise
+}
+```
+
+
+
+```{r}
+# 3. Define a new function to evaluate the clustering performance
+
+# labels denote the true label of documents, predictions denote your clustering results
+evl <- function(labels, predictions){
+
+  labels.mat <- npairs.matrix(labels) # create NxN match matrix for labels
+  preds.mat <- npairs.matrix(predictions) # create NxN match matrix for predictions
+  
+  sum.mat <- labels.mat + preds.mat # sum the two matrices to find matches
+
+  TP <- sum(sum.mat == 2) # the model has correctly predicted that two documents are similar
+  TN <- sum(sum.mat == 0) # the model has correctly predicted that two documents are NOT similar
+  FPN <- sum(sum.mat == 1) # the model has incorrectly predicted that two similar documents are NOT similar, or two dissimilar documents ARE similar
+  RI <- (TP + TN) / (TP + FPN + TN)
+  
+  return (RI)
+}
+```
+
+
+```{r}
+hard.RI <- evl(labels.levels, hard.preds)
+soft.RI <- evl(labels.levels, soft.preds)
+cat("Hard GMM (word count) has a clustering accuracy of", round(hard.RI*100, digits=2),"%", "\nSoft GMM (word count) has a clustering accuracy of", round(soft.RI*100, digits=2), "%")
+```
+
+
+#### Perform PCA and plot
+
+```{r}
+# function to perform PCA and plot cluster 
+plot.cluster <- function(data, color.vector, title=' '){
+  p.comp <- prcomp(data, scale. = TRUE, center = TRUE)
+  plot(p.comp$x, col=color.vector, pch=16,  main=title)
+}
+
+norm.eucl <- function(m) m/apply(m, MARGIN=1, FUN=function(x) sum(x^2)^.5) # euclidean normalisation function
+mdtm.norm <- norm.eucl(mdtm) # normalise mdtm to euclidean space
+mdtm.norm[is.na(mdtm.norm)]=0
+```
+
+
+```{r}
+options(repr.plot.width=15, repr.plot.height=8) # adjusting the plot size
+par(mfrow=c(1,2)) # show plots in 1 row, 2 columns
+## visualize the estimated clusters
+
+plot.cluster(mdtm.norm, hard.preds, 'Hard Clusters (word count)')
+plot.cluster(mdtm.norm, as.factor(labels.levels), 'True Labels')
+```
+
+
+```{r}
+options(repr.plot.width=15, repr.plot.height=8) # adjusting the plot size
+par(mfrow=c(1,2)) # show plots in 1 row, 2 columns
+## visualize the estimated clusters
+
+plot.cluster(mdtm.norm, soft.preds, 'Soft EM Clusters (word count)')
+plot.cluster(mdtm.norm, as.factor(labels.levels), 'True Labels')
+```
+
+Performance for Hard EM was much faster than Soft EM, which took a lot longer to converge. Soft EM also jumped around a lot more in the mu differences, which is probably due to it keeping the relative weights of each cluster when iterating through each document. This affected the weighting of the clusters for the next document. Another thing to note is that the starting point for the algorithm was very important in determining both the final accuracy, and the time taken to converge.
+
+Both Soft and Hard EM performed relatively similarly in accuracy: 
+
+* Hard GMM (word count) has a clustering accuracy of 49.51 % 
+* Soft GMM (word count) has a clustering accuracy of 48.85 %
+
+However their performance accuracy is not that impressive. We can also see from the plots that many of the datapoints were misclassified. There are a number of ways that this could be improved - 
+
+* Firstly, decreasing the sparsity of the data so that we have more words. Currently the dataset is set to a sparsity of 0.90. This means that we are only keeping words that appear at least 10% of the time in the dataset. This could mean that words that are specific to certain clusters are being removed due to the fact that they are not appearing as much in the other clusters, hence we are losing a lot of cluster-specific data.
+
+* Change the initial starting points. As stated, EM is very sensitive to the starting points and I have observed a number of different accuracies produced by the models when these starting values are changed.
+
+
+### Q1.4: Compare with TFIDF
+
+```{r}
+dtm.tfidf <- weightTfIdf(dtm) # document term matrix with TFIDF weights
+
+mdtm.tfidf <- as.matrix(dtm.tfidf) # transpose and convert to matrix
+rownames(mdtm.tfidf) <- 1:nrow(mdtm.tfidf)
+mdtm.tfidf.norm <- norm.eucl(mdtm.tfidf)
+mdtm.tfidf.norm[is.na(mdtm.tfidf.norm)]=0
+```
+
+
+#### Hard GMM with TFIDF
+```{r}
+GMM.hard.tfidf <- c.GMM(mdtm.tfidf.norm, 4, hardclustering = TRUE) # perform GMM on data
+hard.preds.tfidf <- max.col(GMM.hard.tfidf, "first") # get the actual clusters assigned to each document
+hard.preds.tfidf <- as.matrix(hard.preds.tfidf) # convert to matrix
+hard.RI.tfidf <- evl(labels.levels, hard.preds.tfidf) # calculate RI of GMM
+print(paste("Hard GMM (TF-IDF) has a clustering accuracy of", round(hard.RI.tfidf*100, digits=2), "%"))
+```
+
+
+#### Soft GMM with TFIDF
+```{r}
+GMM.soft.tfidf <- c.GMM(mdtm.tfidf.norm, 4, hardclustering = FALSE)
+soft.preds.tfidf <- max.col(GMM.soft.tfidf, "first")
+soft.preds.tfidf <- as.matrix(soft.preds.tfidf)
+soft.RI.tfidf <- evl(labels.levels, soft.preds.tfidf)
+print(paste("Soft GMM (TF-IDF) has a clustering accuracy of", round(soft.RI.tfidf*100, digits=2), "%"))
+```
+
+
+```{r}
+options(repr.plot.width=15, repr.plot.height=8) # adjusting the plot size
+par(mfrow=c(1,2)) # show plots in 1 row, 2 columns
+## visualize the estimated clusters
+
+plot.cluster(mdtm.tfidf.norm, hard.preds.tfidf, 'Hard EM Clusters (TF-IDF)')
+plot.cluster(mdtm.tfidf.norm, as.factor(labels.levels), 'True Labels')
+```
+
+
+```{r}
+options(repr.plot.width=15, repr.plot.height=8) # adjusting the plot size
+par(mfrow=c(1,2)) # show plots in 1 row, 2 columns
+## visualize the estimated clusters
+
+plot.cluster(mdtm.tfidf.norm, soft.preds.tfidf, 'Soft EM Clusters (TF-IDF)')
+plot.cluster(mdtm.tfidf.norm, as.factor(labels.levels), 'True Labels')
+```
+
+
+TF-IDF has performed better in comparison to word-count with my current model parameters:
+
+* Hard GMM (word count) has a clustering accuracy of 49.51 % 
+* Soft GMM (word count) has a clustering accuracy of 48.85 %
+
+* Hard GMM (TF-IDF) has a clustering accuracy of 66.23 %
+* Soft GMM (TF-IDF) has a clustering accuracy of 52.77 %
+
+I believe this means that the words in the data set are unique to each cluster enough that TF-IDF identified the importance of each in each cluster.
+
+I also tested the performance of the GMM model with word count vs. TF-IDF on a sparsity of 97% on document data:
+
+* Hard GMM (word count): 79.26%
+* Soft GMM (word count): 79.46%
+
+* Hard GMM (TF-IDF): 79.55%
+* Soft GMM (TF-IDF): 28.93%
+
+Hard GMM (word count), Soft GMM (word count) and Hard GMM (TF-IDF) performed very well and very similarly to each other, whereas Soft GMM (TF-IDF) performed extremely poorly. 
+
+According to research, TF-IDF can reduce classification accuracy in a few cases:
+
+* When there is class imbalance - If you have more instances of a word in one class, the word features unique to the frequent class risk having lower IDF, thus the best features for that class will have a lower weight
+
+* When you have words with high frequency that are very predictive of one of the classes (words found in most documents of that class). TF-IDF would cause these words to have a lower weight as well.
+
+
+---
+title: "Assessment 2 - Latent Variables & Neural Networks"
+output:
+  html_notebook: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+############################ TO DO ############################
+- Add the epsilon back in to the GMM function (if mu.old - mu.new < epsilon)
+
+
+# Assessment 2 - Latent Variables & Neural Networks
+
+In this assessment, you need to answer two questions about EM, clustering, classification, nerual networks, and other concepts covered in Module 4 and 5. R studio is recommended to use to complete your assessment. All codes need comments to help markers to understand your idea. If no comment is given, you may have a 10% redundancy on your mark. Please refer to weekly activities as examples for how to write comments. After answering all the questions, please knit your R notebook file to HTML or PDF format. Submit both .rmd file and .html or .pdf file to assessment 1 dropbox via the link on the Assessment page. You can compress your files into a zip file for submission. The total mark of this assessment is 50, which worth 20% of your final result.
+
+hint: Please review all reading materials in Module 4 and 5 carefully, especially the activities.
+
+
+# Question 2 Neural Network [20 Marks]
+
+In this question, you are required to construct a neural network classifier with the H2O library. The MINST dataset is used in this question. In consideration of the computation cost, only a portion of the MINST dataset is used, with training (training.xlsx) of 10,000 records and test sets (testing.xlsx) containing 5,000 records, respectively. 
+
+Detailed requirements are listed as below. 
+
+1. Build a 3-layer neural network with only one hidden layer. Change the number of neurons in the hidden layer from 10 to 50 and record the test classification accuracy accordingly. [10 marks]
+
+2. Visualize the classification accuracy against the neuron number and explain your findings. [5 marks]
+
+3. Try to construct a deeper neural network with more hidden layers to see if there is any improvement on the test classification performance. This is an open question, you can determine the number of hidden layers and the neuron numbers in each hidden layer. Summarize and explain your results. [5 marks]
+
+
+### Question 2 answer:
+
+**Hint: Comments and explanation for each step are required to be inserted below.**
+
+```{r}
+# read data
+# h2o.removeAll()
+h2o.init()
+
+train.file <- '/Users/sarahkarim/Documents/sadia/A2/training.csv'; # use absolute address or relative to the start location of the H2O instance!
+test.file <- '/Users/sarahkarim/Documents/sadia/A2/testing.csv'; # use absolute address or relative to the start location of the H2O instance!
+
+
+train.file <- "training.csv"
+train.frame <- h2o.importFile(normalizePath(train.file)) # convert to h2o frame
+train.frame[,1] <- as.factor(train.frame[,1]) # convert first column to factor for classification
+train.frame <- train.frame[-1,] # remove first row which is NA
+
+
+test.file <- "testing.csv"
+test.frame <- h2o.importFile(normalizePath(test.file))
+test.frame[,1] <- as.factor(test.frame[,1]) # convert first column to factor for classification
+test.frame <- test.frame[-1,] # remove first row which is NA
+
+model.acc <- matrix(, ncol=2)
+```
+
+
+```{r}
+# 1. build neural network model in H20
+options(warn=-1)
+NN10.model <- h2o.deeplearning(    
+    x = 1:785, # select all pixels,
+    y = 1,
+    training_frame = train.frame, # specify the frame (imported file) 
+    hidden = c(10), # number of layers and their units
+    epochs = 100, # maximum number of epoches  
+    activation = 'Tanh', # activation function 
+    seed = 123
+)
+```
+
+```{r}
+# Apply learned model to test set
+NN10.preds <- h2o.predict(NN10.model, test.frame) 
+NN10.cf <- h2o.confusionMatrix(NN10.model, test.frame) # generate confusion matrix
+NN10.FNFP <- tail(NN10.cf["Error"], n=1) # extract the error rate (FP + FN)
+NN10.acc <- (1 - NN10.FNFP)*100 # 1 - (FN + FP) = TP + TN
+
+print(paste("Neural Network with 10 neurons has an accuracy of", NN10.acc, "%"))
+model.acc <- rbind(model.acc, c(10, NN10.acc))
+model.acc
+```
+
+
+```{r}
+# 1. build neural network model in H20
+options(warn=-1)
+NN50.model <- h2o.deeplearning(    
+    x = 1:785, # select all pixels,
+    y = 1,
+    training_frame = train.frame, # specify the frame (imported file) 
+    hidden = c(50), # number of layers and their units
+    epochs = 100, # maximum number of epoches  
+    activation = 'Tanh' # activation function 
+)
+```
+
+
+```{r}
+#generate predictions on the testset
+NN50.preds <- h2o.predict(NN50.model, test.frame)
+NN50.cf <- h2o.confusionMatrix(NN50.model, test.frame) # generate confusion matrix
+NN50.FNFP <- tail(NN50.cf["Error"], n=1) # extract the error rate (FP + FN)
+NN50.acc <- (1 - NN50.FNFP)*100 # 1 - (FN + FP) = TP + TN
+
+print(paste("Neural Network with 50 neurons has an accuracy of", NN50.acc, "%"))
+
+model.acc <- rbind(model.acc, c(50, NN50.acc))
+
+```
+
+
+
+```{r}
+# 2. visualize the classification accuracy
+plot(model.acc)
+model.acc
+```
+
+Explain your findings:
+Increasing the number of neurons from 10 to 50 in the hidden layer has increased the accuracy from 87.5% to 92.02% - this is to be expected since there is added non-linearity to the model so this has learned the data better since there are several hundred input variables to learn from.
+
+
+```{r}
+# 3. construct a deeper neural network to check whether the result can be improved
+options(warn=-1)
+NN.deep1 <- h2o.deeplearning(    
+    x = 1:785, # select all pixels,
+    y = 1,
+    training_frame = train.frame, # specify the frame (imported file) 
+    hidden = c(50, 50), # number of layers and their units
+    epochs = 100, # maximum number of epoches  
+    activation = 'Tanh' # activation function 
+)
+
+NN.deep1.preds <- h2o.predict(NN.deep1, test.frame)
+NN.deep1.cf <- h2o.confusionMatrix(NN.deep1, test.frame) # generate confusion matrix
+NN.deep1.FNFP <- tail(NN.deep1.cf["Error"], n=1) # extract the error rate (FP + FN)
+NN.deep1.acc <- (1 - NN.deep1.FNFP)*100 # 1 - (FN + FP) = TP + TN
+
+print(paste("Neural Network with 50 neurons and 2 hidden layers has an accuracy of", NN.deep1.acc, "%"))
+```
+
+
+```{r}
+options(warn=-1)
+NN.deep2 <- h2o.deeplearning(    
+    x = 1:785, # select all pixels,
+    y = 1,
+    training_frame = train.frame, # specify the frame (imported file) 
+    hidden = c(50, 50, 50), # number of layers and their units
+    epochs = 100, # maximum number of epoches  
+    activation = 'Tanh' # activation function 
+)
+
+NN.deep2.preds <- h2o.predict(NN.deep2, test.frame)
+NN.deep2.cf <- h2o.confusionMatrix(NN.deep2, test.frame) # generate confusion matrix
+NN.deep2.FNFP <- tail(NN.deep2.cf["Error"], n=1) # extract the error rate (FP + FN)
+NN.deep2.acc <- (1 - NN.deep2.FNFP)*100 # 1 - (FN + FP) = TP + TN
+
+print(paste("Neural Network with 50 neurons and 3 hidden layers has an accuracy of", NN.deep2.acc, "%"))
+```
+
+
+```{r}
+options(warn=-1)
+NN.deep3 <- h2o.deeplearning(    
+    x = 1:785, # select all pixels,
+    y = 1,
+    training_frame = train.frame, # specify the frame (imported file) 
+    hidden = c(50, 50, 50, 50), # number of layers and their units
+    epochs = 100, # maximum number of epoches  
+    activation = 'Tanh' # activation function 
+)
+
+NN.deep3.preds <- h2o.predict(NN.deep3, test.frame)
+NN.deep3.cf <- h2o.confusionMatrix(NN.deep3, test.frame) # generate confusion matrix
+NN.deep3.FNFP <- tail(NN.deep3.cf["Error"], n=1) # extract the error rate (FP + FN)
+NN.deep3.acc <- (1 - NN.deep3.FNFP)*100 # 1 - (FN + FP) = TP + TN
+
+print(paste("Neural Network with 50 neurons and 2 hidden layers has an accuracy of", NN.deep3.acc, "%"))
+
+```
+
+Explain your findings:
+Adding more layers to the neural networks does increase the performance of the model, but only up to a certain point. After that, we start to see that the model is overfitting the data and performing worse on the testing set.
+
+Increasing the number of layers increases the number of weights in the model, and so the complexity increases. This results in overfitting of the data which then performs poorly on the testing set. Increasing the number of layers also decreases the performance of the model, so there is a tradeoff here.
+
+The answer given by Vijay Sathish to this Quora question explains model performance really well: https://www.quora.com/How-does-the-number-of-hidden-layer-affect-the-accuracy-in-deep-learning
+
+In summary, the higher the number of neutrons, the greater the model capacity (the ability to learn complexity) and in general, deeper networks are a more efficient way of utilizing available model capacity.
+
